@@ -1,5 +1,9 @@
-from pathlib import Path
 import logging
+from pathlib import Path
+from typing import Any, Dict, Mapping, Optional
+
+from qualibrate import NodeParameters
+from qualibrate.qualibration_node import QualibrationNode
 
 logger = logging.getLogger(__name__)
 
@@ -23,11 +27,14 @@ def file_is_calibration_node(file: Path):
 class QualibrationLibrary:
     active_library: "QualibrationLibrary" = None
 
-    def __init__(self, set_active=True):
-        self.nodes = {}
+    def __init__(self, library_folder: Optional[Path] = None, set_active=True):
+        self.nodes: Dict[str, QualibrationNode] = {}
 
         if set_active:
             QualibrationLibrary.active_library = self
+
+        if library_folder:
+            self.scan_folder_for_nodes(library_folder)
 
     def scan_folder_for_nodes(self, path: Path, append=False):
         if isinstance(path, str):
@@ -36,10 +43,8 @@ class QualibrationLibrary:
         if not append:
             self.nodes = {}
 
+        original_mode = QualibrationNode.mode
         try:
-            from qualibrate import QualibrationNode
-
-            original_mode = QualibrationNode.mode
             QualibrationNode.mode = "library_scan"
 
             for file in sorted(path.iterdir()):
@@ -62,21 +67,18 @@ class QualibrationLibrary:
 
     def add_node(self, node):
         if node.name in self.nodes:
-            logger.warning(f'Node "{node.name}" already exists in library, overwriting')
+            logger.warning(
+                f'Node "{node.name}" already exists in library, overwriting'
+            )
 
         self.nodes[node.name] = node
 
+    def serialize(self) -> Mapping[str, Any]:
+        return {"nodes": [node.serialize() for node in self.nodes.values()]}
 
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.DEBUG)
-    from qualibrate import QualibrationLibrary
+    def get_nodes(self) -> Mapping[str, QualibrationNode]:
+        return self.nodes
 
-    library = QualibrationLibrary()
-
-    assert QualibrationLibrary.active_library == library
-
-    library.scan_folder_for_nodes(
-        "/Users/serwan/Repositories/qualibrate/playground/calibrations"
-    )
-
-    print(library.nodes)
+    def run(
+        self, node: QualibrationNode, input_parameters: NodeParameters, **kwargs
+    ): ...
