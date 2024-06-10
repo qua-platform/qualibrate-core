@@ -16,18 +16,26 @@ Before proceeding to the next node:
     - Save the current state by calling machine.save("quam")
 """
 
+from typing import Optional
 from qualibrate import QualibrationNode, NodeParameters
 
 
 class Parameters(NodeParameters):
-    resonator: list = None
+    resonator: Optional[str] = None
+    n_avg: int = 100
     simulate: bool = True
+    f_min: float = 10e6
+    f_max = 251e6
+    f_step = 1e6
 
 
 node = QualibrationNode(
     name="resonator_spectroscopy_single",
     parameters_class=Parameters,
 )
+
+# Specify parameters used when running this script locally
+node.parameters = Parameters(resonator="#/qubits/q0/resonator", simulate=True)
 
 
 from qm.qua import *
@@ -50,6 +58,7 @@ from scipy import signal
 u = unit(coerce_to_integer=True)
 # Instantiate the QuAM class from the state file
 machine = QuAM.load("quam_state")
+node.machine = machine
 # Generate the OPX and Octave configurations
 config = machine.generate_config()
 octave_config = machine.get_octave_config()
@@ -57,17 +66,18 @@ octave_config = machine.get_octave_config()
 qmm = machine.connect()
 
 # Get the relevant QuAM components
-rr = machine.active_qubits[0].resonator  # The resonator to measure
+rr = machine._get_reference(node.parameters.resonator)  # The resonator to measure
 
 ###################
 # The QUA program #
 ###################
-n_avg = 100  # The number of averages
 # The frequency sweep parameters
 ## rr1
 # frequencies = np.arange(10e6, 251e6, 1e6)
 # rr2
-frequencies = np.arange(10e6, 251e6, 1e6)
+frequencies = np.arange(
+    node.parameters.f_min, node.parameters.f_max, node.parameters.f_step
+)
 
 with program() as resonator_spec:
     n = declare(int)  # QUA variable for the averaging loop
@@ -81,7 +91,7 @@ with program() as resonator_spec:
     # Bring the active qubits to the minimum frequency point
     machine.apply_all_flux_to_min()
 
-    with for_(n, 0, n < n_avg, n + 1):  # QUA for_ loop for averaging
+    with for_(n, 0, n < node.parameters.n_avg, n + 1):  # QUA for_ loop for averaging
         with for_(
             *from_array(f, frequencies)
         ):  # QUA for_ loop for sweeping the frequency
@@ -123,19 +133,21 @@ else:
     # Send the QUA program to the OPX, which compiles and executes it
     job = qm.execute(resonator_spec)
     # Get results from QUA program
-    results = fetching_tool(job, data_list=["I", "Q", "iteration"], mode="live")
+    node.results = fetching_tool(job, data_list=["I", "Q", "iteration"], mode="live")
     # Live plotting
     fig = plt.figure()
     interrupt_on_close(fig, job)  # Interrupts the job when closing the figure
-    while results.is_processing():
+    while node.results.is_processing():
         # Fetch results
-        I, Q, iteration = results.fetch_all()
+        I, Q, iteration = node.results.fetch_all()
         # Convert results into Volts
         S = u.demod2volts(I + 1j * Q, rr.operations["readout"].length)
         R = np.abs(S)  # Amplitude
         phase = np.angle(S)  # Phase
         # Progress bar
-        progress_counter(iteration, n_avg, start_time=results.get_start_time())
+        progress_counter(
+            iteration, node.parameters.n_avg, start_time=node.results.get_start_time()
+        )
         # Plot results
         plt.suptitle(
             f"{rr.name} spectroscopy - LO = {rr.frequency_converter_up.LO_frequency / u.GHz} GHz"
@@ -156,7 +168,7 @@ else:
     qm.close()
 
     # Save data from the node
-    data = {
+    node.results = {
         "frequencies": frequencies,
         "R": R,
         "phase": signal.detrend(np.unwrap(phase)),
@@ -185,15 +197,15 @@ else:
         rr.intermediate_frequency = int(res_spec_fit["f"][0] * u.MHz)
         rr.frequency_bare = rr.rf_frequency
         # Save data from the node
-        data[f"{rr.name}"] = {
+        node.results[f"{rr.name}"] = {
             "resonator_frequency": int(res_spec_fit["f"][0] * u.MHz),
             "successful_fit": True,
         }
-        data["figure_fit"] = fig_fit
+        node.results["figure_fit"] = fig_fit
 
     except (Exception,):
-        data["successful_fit"] = False
+        node.results["successful_fit"] = False
         pass
 
     # Save data from the node
-    node_save("resonator_spectroscopy_single", data, machine)
+    node.save()
