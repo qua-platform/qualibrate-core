@@ -31,6 +31,7 @@ node = QualibrationNode(
     parameters_class=Parameters,
 )
 
+node.parameters = Parameters()
 
 ###################################################
 #  Load QuAM and open Communication with the QOP  #

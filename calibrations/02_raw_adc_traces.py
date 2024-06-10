@@ -12,8 +12,6 @@ from pydantic import BaseModel
 from qualibrate import QualibrationNode, NodeParameters
 from quam.components import InOutIQChannel
 
-print(InOutIQChannel)
-
 
 class Resonator(BaseModel):
     pass
