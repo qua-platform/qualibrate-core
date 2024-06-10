@@ -133,20 +133,20 @@ else:
     # Send the QUA program to the OPX, which compiles and executes it
     job = qm.execute(resonator_spec)
     # Get results from QUA program
-    node.results = fetching_tool(job, data_list=["I", "Q", "iteration"], mode="live")
+    program_output = fetching_tool(job, data_list=["I", "Q", "iteration"], mode="live")
     # Live plotting
     fig = plt.figure()
     interrupt_on_close(fig, job)  # Interrupts the job when closing the figure
-    while node.results.is_processing():
+    while program_output.is_processing():
         # Fetch results
-        I, Q, iteration = node.results.fetch_all()
+        I, Q, iteration = program_output.fetch_all()
         # Convert results into Volts
         S = u.demod2volts(I + 1j * Q, rr.operations["readout"].length)
         R = np.abs(S)  # Amplitude
         phase = np.angle(S)  # Phase
         # Progress bar
         progress_counter(
-            iteration, node.parameters.n_avg, start_time=node.results.get_start_time()
+            iteration, node.parameters.n_avg, start_time=program_output.get_start_time()
         )
         # Plot results
         plt.suptitle(
