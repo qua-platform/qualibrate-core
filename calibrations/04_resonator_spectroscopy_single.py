@@ -25,8 +25,8 @@ class Parameters(NodeParameters):
     n_avg: int = 100
     simulate: bool = True
     f_min: float = 10e6
-    f_max = 251e6
-    f_step = 1e6
+    f_max: float = 251e6
+    f_step: float = 1e6
 
 
 node = QualibrationNode(
