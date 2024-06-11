@@ -10,7 +10,6 @@ correcting any non-zero DC offsets, and estimating the SNR.
 
 from pydantic import BaseModel
 from qualibrate import QualibrationNode, NodeParameters
-from quam.components import InOutIQChannel
 
 
 class Resonator(BaseModel):
