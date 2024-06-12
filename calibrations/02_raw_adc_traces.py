@@ -17,7 +17,7 @@ class Resonator(BaseModel):
 
 
 class Parameters(NodeParameters):
-    resonators: list = []
+    resonator: str
     simulate: bool = True
 
 
