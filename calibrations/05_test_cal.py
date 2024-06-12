@@ -17,10 +17,6 @@ The data undergoes post-processing to calibrate three distinct parameters:
 from qualibrate import QualibrationNode, NodeParameters
 
 
-class Resonator:
-    pass
-
-
 class Parameters(NodeParameters):
     resonator: str = "hi"
     simulate: bool = True
@@ -36,4 +32,8 @@ node.parameters = Parameters()
 # Temporarily sleep 8 seconds
 from time import sleep
 
-sleep(8)
+sleep(4)
+
+node.results = {"value1": 42}
+
+node.save()

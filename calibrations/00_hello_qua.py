@@ -14,8 +14,8 @@ node = QualibrationNode(
     parameters_class=NodeParameters,
 )
 
+print(f"{node.mode=}")
 node.parameters.simulate = True
-
 ###################################################
 #  Load QuAM and open Communication with the QOP  #
 ###################################################
