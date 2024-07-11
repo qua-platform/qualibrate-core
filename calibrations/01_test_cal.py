@@ -14,7 +14,7 @@ class Parameters(NodeParameters):
 node = QualibrationNode(
     name="test_cal",
     parameters_class=Parameters,
-    description="Test calibration that wait a few seconds, then plots random data.",
+    # description="Test calibration that wait a few seconds, then plots random data.",
 )
 # node.mode.interactive = True
 
@@ -37,7 +37,8 @@ sleep(4)
 
 fig, ax = plt.subplots()
 xvals = np.linspace(-10, 10, node.parameters.sampling_points)
-gaussian = np.exp(-(xvals**2))
+offset = np.random.rand() * 3
+gaussian = np.exp(-((xvals + offset) ** 2))
 noise = node.parameters.noise_factor * np.random.rand(
     node.parameters.sampling_points
 )
@@ -45,7 +46,7 @@ ax.plot(xvals, gaussian + noise)
 ax.set_xlabel("Frequency shift (Hz)")
 ax.set_ylabel("Signal amplitude (a.u.)")
 
-node.results = {"resonator_val": node.parameters.resonator, "results_fig": fig}
+node.results = {"frequency_shift": offset, "results_fig": fig}
 
 with node.record_state_updates():
     machine.channels["ch1"].intermediate_frequency = 50e6
