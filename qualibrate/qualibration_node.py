@@ -1,31 +1,38 @@
+import importlib
+import sys
+import typing
 import warnings
 from contextlib import contextmanager
 from functools import partialmethod
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, Generator, Mapping, Optional, Type
+from typing import Any, Dict, Generator, Mapping, Optional, Type
 
 import matplotlib
+from matplotlib.rcsetup import interactive_bk
 
-from pydantic import BaseModel
-
-from qualibrate import NodeParameters
+from qualibrate.parameters import NodeParameters
+from qualibrate.q_runnnable import QRunnable, file_is_calibration_instance
 from qualibrate.storage import StorageManager
 from qualibrate.storage.local_storage_manager import LocalStorageManager
+from qualibrate.utils.exceptions import StopInspection
+from qualibrate.utils.logger import logger
+from qualibrate.utils.type_protocols import (
+    GetRefGetItemProtocol,
+    GetRefProtocol,
+)
+
+if typing.TYPE_CHECKING:
+    from qualibrate.qualibration_library import QualibrationLibrary
 
 
-class StopInspection(Exception):
-    pass
+__all__ = ["QualibrationNode"]
 
 
-class NodeMode(BaseModel):
-    inspection: bool = False
-    interactive: bool = False
-    external: bool = True
+QNodeBaseType = QRunnable[NodeParameters]
 
 
-class QualibrationNode:
-    mode = NodeMode()
+class QualibrationNode(QRunnable[NodeParameters]):
     storage_manager: Optional[StorageManager] = None
     last_instantiated_node: Optional["QualibrationNode"] = None
 
@@ -44,17 +51,15 @@ class QualibrationNode:
         description: Optional[str] = None,
     ):
         if hasattr(self, "_initialized"):
+            self._warn_if_external_and_interactive_mpl()
             return
+        super(QualibrationNode, self).__init__(name, parameters_class)
 
-        self.name = name
-        self.parameters_class = parameters_class
         self.description = description
-        self.mode = self.__class__.mode.model_copy()
 
         self.__parameters: Optional[NodeParameters] = None
         self._state_updates: dict[str, Any] = {}
         self.results: dict[Any, Any] = {}
-        self.node_filepath: Optional[Path] = None
         self.machine = None
 
         self._initialized = True
@@ -66,21 +71,23 @@ class QualibrationNode:
             self.__class__.last_instantiated_node = self
             raise StopInspection("Node instantiated in inspection mode")
 
-    @property
-    def parameters(self):
-        return self.__parameters
-
-    @parameters.setter
-    def parameters(self, new_parameters: NodeParameters) -> None:
-        if self.mode.external and self.__parameters is not None:
-            return
-        if not isinstance(new_parameters, self.parameters_class):
-            raise TypeError(
-                "Expected parameters is instance of "
-                f"{self.parameters_class.__module__}"
-                f".{self.parameters_class.__name__}"
+    def _warn_if_external_and_interactive_mpl(self) -> None:
+        mpl_backend = matplotlib.get_backend()
+        if self.mode.external and mpl_backend in interactive_bk:
+            matplotlib.use("agg")
+            raise UserWarning(
+                f"Using interactive matplotlib backend '{mpl_backend}' in "
+                "external mode. The backend is changed to 'agg'."
             )
-        self.__parameters = new_parameters
+
+    def __str__(self) -> str:
+        return f"{self.__class__.__name__}: {self.name}"
+
+    def __repr__(self) -> str:
+        return (
+            f"{self.__class__.__name__}: {self.name} "
+            f"(mode: {self.mode}; parameters: {self.parameters})"
+        )
 
     @property
     def snapshot_idx(self) -> Optional[int]:
@@ -91,7 +98,7 @@ class QualibrationNode:
     def serialize(self) -> Mapping[str, Any]:
         return {
             "name": self.name,
-            "input_parameters": self.parameters_class.serialize(),
+            "parameters": self.parameters_class.serialize(),
             "description": self.description,
         }
 
@@ -112,28 +119,38 @@ class QualibrationNode:
             )
         self.storage_manager.save(node=self)
 
-    def run_node(self, input_parameters: NodeParameters) -> None:
+    def run(self, parameters: NodeParameters) -> None:
+        if self.filepath is None:
+            raise RuntimeError("Node file path was not provided")
         external = self.mode.external
         interactive = self.mode.interactive
         try:
             self.mode.external = True
             self.mode.interactive = True
-            self.__parameters = input_parameters
+            self.__parameters = parameters
             # TODO: raise exception if node file isn't specified
-            self.run_node_file(self.node_filepath)
+            self.run_node_file(self.filepath)
         finally:
             self.mode.external = external
             self.mode.interactive = interactive
 
-    def run_node_file(self, node_filepath: Optional[Path]) -> None:
+    def run_node_file(self, node_filepath: Path) -> None:
         mpl_backend = matplotlib.get_backend()
+        str_path = str(node_filepath.parent)
+        # Appending dir with nodes can cause issues with relative imports
+        lib_path_exists = str_path in sys.path
+        if not lib_path_exists:
+            sys.path.append(str_path)
+
         try:
             # Temporarily set the singleton instance to this node
             self.__class__._singleton_instance = self
-            code = node_filepath.read_text()  # type: ignore[union-attr]
             matplotlib.use("agg")
-            exec(code)
+            importlib.import_module(node_filepath.stem)
+
         finally:
+            if not lib_path_exists:
+                sys.path.remove(str_path)
             self.__class__._singleton_instance = None
             matplotlib.use(mpl_backend)
 
@@ -143,7 +160,7 @@ class QualibrationNode:
 
     @contextmanager
     def record_state_updates(
-        self, interactive_only=True
+        self, interactive_only: bool = True
     ) -> Generator[None, None, None]:
         if not self.mode.interactive and interactive_only:
             yield
@@ -200,12 +217,68 @@ class QualibrationNode:
             for cls, setitem_func in cls_setitem_funcs.items():
                 setattr(cls, "__setitem__", setitem_func)
 
+    @classmethod
+    def scan_folder_for_instances(
+        cls, path: Path, library: "QualibrationLibrary"
+    ) -> Dict[str, QNodeBaseType]:
+        nodes: Dict[str, QNodeBaseType] = {}
+        inspection = cls.mode.inspection
+        str_path = str(path)
+        lib_path_exists = str_path in sys.path
+        if not lib_path_exists:
+            sys.path.append(str_path)
+        try:
+            cls.mode.inspection = True
+
+            for file in sorted(path.iterdir()):
+                if not file_is_calibration_instance(file, cls.__name__):
+                    continue
+                cls.scan_node_file(file, nodes)
+        finally:
+            if not lib_path_exists:
+                sys.path.remove(str_path)
+            cls.mode.inspection = inspection
+        return nodes
+
+    @classmethod
+    def scan_node_file(
+        cls, file: Path, nodes: Dict[str, QNodeBaseType]
+    ) -> None:
+        logger.info(f"Scanning node file {file}")
+        try:
+            # TODO Think of a safer way to execute the code
+            importlib.import_module(file.name)
+        except StopInspection:
+            node = QualibrationNode.last_instantiated_node
+            QualibrationNode.last_instantiated_node = None
+
+            if node is None:
+                logger.warning(f"No node instantiated in file {file}")
+                return
+
+            node.filepath = file
+            node.mode.inspection = False
+            cls.add_node(node, nodes)
+
+    @classmethod
+    def add_node(
+        cls,
+        node: "QualibrationNode",
+        nodes: Dict[str, QNodeBaseType],
+    ) -> None:
+        if node.name in nodes:
+            logger.warning(
+                f'Node "{node.name}" already exists in library, overwriting'
+            )
+
+        nodes[node.name] = node
+
 
 def _record_state_update_getattr(
-    quam_obj,
+    quam_obj: GetRefProtocol,
     attr: str,
     val: Any = None,
-    node=None,
+    node: Optional[QualibrationNode] = None,
 ) -> None:
     reference = quam_obj.get_reference(attr)
     old = getattr(quam_obj, attr)
@@ -219,10 +292,10 @@ def _record_state_update_getattr(
 
 
 def _record_state_update_getitem(
-    quam_obj,
+    quam_obj: GetRefGetItemProtocol,
     attr: str,
     val: Any = None,
-    node=None,
+    node: Optional[QualibrationNode] = None,
 ) -> None:
     reference = quam_obj.get_reference(attr)
     old = quam_obj[attr]
