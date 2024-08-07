@@ -42,6 +42,7 @@ def test_export(
             {"state": NodeState.pending, "retries": 0, "id": "one_more_node"},
             {"state": NodeState.pending, "retries": 0, "id": "test_cal"},
         ],
+        # this is standard name so kept as is (not changed to
         "adjacency": [[{"id": "one_more_node"}], [{"id": "test_cal"}], []],
     }
 
@@ -120,11 +121,10 @@ def test_serialize(
                 },
             },
         },
-        "connectivity": {
-            "test_node": [{"id": "one_more_node"}],
-            "one_more_node": [{"id": "test_cal"}],
-            "test_cal": [],
-        },
+        "connectivity": [
+            ("test_node", "one_more_node"),
+            ("one_more_node", "test_cal"),
+        ],
         "parameters": {
             "retries": {
                 "default": 2,
@@ -143,7 +143,40 @@ def test_cytoscape(
         graph_params.__class__,
         {"test_node": ["one_more_node"], "one_more_node": ["test_cal"]},
     )
-    print(g.cytoscape_representation())
+
+    assert g.cytoscape_representation() == [
+        {
+            "group": "nodes",
+            "data": {"id": "test_node"},
+            "position": {"x": 100, "y": 100},
+        },
+        {
+            "group": "nodes",
+            "data": {"id": "one_more_node"},
+            "position": {"x": 100, "y": 100},
+        },
+        {
+            "group": "nodes",
+            "data": {"id": "test_cal"},
+            "position": {"x": 100, "y": 100},
+        },
+        {
+            "group": "edges",
+            "data": {
+                "id": "test_node_one_more_node",
+                "source": "test_node",
+                "target": "one_more_node",
+            },
+        },
+        {
+            "group": "edges",
+            "data": {
+                "id": "one_more_node_test_cal",
+                "source": "one_more_node",
+                "target": "test_cal",
+            },
+        },
+    ]
 
 
 def test_run_sequence(
@@ -154,7 +187,16 @@ def test_run_sequence(
         graph_params.__class__,
         {"test_node": ["one_more_node"], "one_more_node": ["test_cal"]},
     )
-    g.run(graph_params)
+    g.run(
+        {
+            **graph_params.model_dump(),
+            "nodes_parameters": {
+                "test_node": {},
+                "one_more_node": {},
+                "test_cal": {},
+            }
+        }
+    )
 
 
 def test_run_multi_pred(

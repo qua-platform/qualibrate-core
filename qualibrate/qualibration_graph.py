@@ -53,21 +53,21 @@ class QualibrationGraph(QRunnable[GraphParameters]):
         self,
         name: str,
         parameters_class: Type[GraphParameters],
-        adjacency: Mapping[str, Sequence[str]],
+        connectivity: Mapping[str, Sequence[str]],
     ):
         """
         :param name: graph name
         :param parameters_class: class of parameters
-        :param adjacency: Adjacency list.
+        :param connectivity: Adjacency list.
             Format: `{"name_1": ["name_2", "name_3"], "name_2": ["name_3"]}`
         """
         super().__init__(name, parameters_class)
-        self._adjacency = adjacency
+        self._connectivity = connectivity
         self.full_parameters: Optional[Type[ExecutionParameters]] = None
         self._graph = nx.DiGraph()
 
         qlib = self._get_qlibrary_or_error()
-        for v_name, xs_names in adjacency.items():
+        for v_name, xs_names in connectivity.items():
             v = self._add_node_by_name(v_name, qlib)
             for x_name in xs_names:
                 x = self._add_node_by_name(x_name, qlib)
@@ -245,7 +245,7 @@ class QualibrationGraph(QRunnable[GraphParameters]):
             }
         )
         nodes = {}
-        connectivity = {}
+        connectivity = []
         for node, adjacency in zip(data.pop("nodes"), data.pop("adjacency")):
             node_id = node["id"]
             nodes[node_id] = node
@@ -256,7 +256,7 @@ class QualibrationGraph(QRunnable[GraphParameters]):
                     "parameters": parameters["nodes_parameters"][node["id"]],
                 }
             )
-            connectivity[node_id] = adjacency
+            connectivity.extend([(node_id, item["id"]) for item in adjacency])
         data.update({"nodes": nodes, "connectivity": connectivity})
         return data
 
@@ -290,7 +290,6 @@ class QualibrationGraph(QRunnable[GraphParameters]):
                     "target": dest,
                 },
             }
-            for source, dests in serialized["connectivity"].items()
-            for dest in dests
+            for source, dest in serialized["connectivity"]
         ]
         return [*nodes, *edges]
