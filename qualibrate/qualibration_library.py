@@ -9,7 +9,10 @@ from qualibrate.parameters import (
     NodeParameters,
 )
 from qualibrate.qualibration_graph import QualibrationGraph
-from qualibrate.qualibration_node import QualibrationNode
+from qualibrate.qualibration_node import (
+    NodeCreateParametersType,
+    QualibrationNode,
+)
 from qualibrate.utils.logger_m import logger
 
 __all__ = ["QualibrationLibrary"]
@@ -40,7 +43,7 @@ class QualibrationLibrary:
     def __init__(
         self, library_folder: Optional[Path] = None, set_active: bool = True
     ):
-        self.nodes: Dict[str, QualibrationNode] = {}
+        self.nodes: Dict[str, QualibrationNode[NodeCreateParametersType]] = {}
         self.graphs: Dict[str, QualibrationGraph] = {}
         self._library_folder = library_folder
 
@@ -64,7 +67,7 @@ class QualibrationLibrary:
             logger.warning("Can't rescan library without specified folder.")
             return
         self.nodes = cast(
-            Dict[str, QualibrationNode],
+            Dict[str, QualibrationNode[NodeCreateParametersType]],
             QualibrationNode.scan_folder_for_instances(self._library_folder),
         )
         self.graphs = cast(

@@ -6,6 +6,7 @@ from typing import (
     Any,
     Callable,
     Dict,
+    Generic,
     Mapping,
     Optional,
     Sequence,
@@ -35,7 +36,10 @@ from qualibrate.q_runnnable import (
     file_is_calibration_instance,
     run_modes_ctx,
 )
-from qualibrate.qualibration_node import QualibrationNode
+from qualibrate.qualibration_node import (
+    NodeCreateParametersType,
+    QualibrationNode,
+)
 from qualibrate.utils.exceptions import StopInspection
 from qualibrate.utils.logger_m import logger
 from qualibrate.utils.read_files import get_module_name, import_from_path
@@ -57,7 +61,8 @@ _OrchestratorGraphType = Union[
 
 
 class QualibrationGraph(
-    QRunnable[GraphCreateParametersType, GraphRunParametersType]
+    QRunnable[GraphCreateParametersType, GraphRunParametersType],
+    Generic[NodeCreateParametersType],
 ):
     """
     Represents a graph of nodes for calibration purposes.
@@ -92,7 +97,7 @@ class QualibrationGraph(
         self,
         name: str,
         parameters: GraphCreateParametersType,
-        nodes: Mapping[str, QualibrationNode],
+        nodes: Mapping[str, QualibrationNode[NodeCreateParametersType]],
         connectivity: Sequence[Tuple[str, str]],
         orchestrator: Optional["QualibrationOrchestrator"] = None,
         description: Optional[str] = None,
@@ -102,14 +107,18 @@ class QualibrationGraph(
         super().__init__(name, parameters, description=description, modes=modes)
         self._nodes = self._validate_nodes_names_mapping(nodes)
         self._connectivity = connectivity
-        self._graph: "nx.DiGraph[QualibrationNode]" = nx.DiGraph()
+        self._graph: "nx.DiGraph[QualibrationNode[NodeCreateParametersType]]" = nx.DiGraph()
         self._orchestrator = orchestrator
         self._initial_targets: Sequence[TargetType] = []
         for node_name in self._nodes:
             self._add_node_by_name(node_name)
         for v_name, x_name in connectivity:
-            v = self._add_node_by_name(v_name)
-            x = self._add_node_by_name(x_name)
+            v: QualibrationNode[NodeCreateParametersType] = (
+                self._add_node_by_name(v_name)
+            )
+            x: QualibrationNode[NodeCreateParametersType] = (
+                self._add_node_by_name(x_name)
+            )
             if not self._graph.has_edge(v, x):
                 self._graph.add_edge(v, x)
         self.full_parameters_class = self._build_parameters_class()
@@ -124,8 +133,8 @@ class QualibrationGraph(
 
     @staticmethod
     def _validate_nodes_names_mapping(
-        nodes: Mapping[str, QualibrationNode],
-    ) -> Mapping[str, QualibrationNode]:
+        nodes: Mapping[str, QualibrationNode[NodeCreateParametersType]],
+    ) -> Mapping[str, QualibrationNode[NodeCreateParametersType]]:
         """
         Validates the mapping of nodes and ensures unique names.
 
@@ -213,7 +222,9 @@ class QualibrationGraph(
             # TODO Think of a safer way to execute the code
             _module = import_from_path(get_module_name(file), file)
         except StopInspection as ex:
-            graph = cast("QualibrationGraph", ex.instance)
+            graph = cast(
+                "QualibrationGraph[NodeCreateParametersType]", ex.instance
+            )
             graph.filepath = file
             graph.modes.inspection = False
             cls.add_graph(graph, graphs)
@@ -221,7 +232,7 @@ class QualibrationGraph(
     @classmethod
     def add_graph(
         cls,
-        graph: "QualibrationGraph",
+        graph: "QualibrationGraph[NodeCreateParametersType]",
         graphs: Dict[str, QGraphBaseType],
     ) -> None:
         """
@@ -402,7 +413,7 @@ class QualibrationGraph(
 
     def run(
         self, **passed_parameters: Any
-    ) -> Tuple["QualibrationGraph", BaseRunSummary]:
+    ) -> Tuple["QualibrationGraph[NodeCreateParametersType]", BaseRunSummary]:
         """
         Runs the graph using the given parameters.
 
@@ -438,7 +449,9 @@ class QualibrationGraph(
             run_summary = self._post_run(created_at, run_error)
         return self, run_summary
 
-    def _get_qnode_or_error(self, node_name: str) -> QualibrationNode:
+    def _get_qnode_or_error(
+        self, node_name: str
+    ) -> QualibrationNode[NodeCreateParametersType]:
         """
         Retrieves a node by name or raises an error if the node is not found.
 
@@ -459,7 +472,9 @@ class QualibrationGraph(
             raise ValueError(f"Unknown node with name {node_name}")
         return node
 
-    def _add_node_by_name(self, node_name: str) -> QualibrationNode:
+    def _add_node_by_name(
+        self, node_name: str
+    ) -> QualibrationNode[NodeCreateParametersType]:
         """
         Adds a node to the graph by name, if not already present.
 

@@ -11,10 +11,12 @@ from typing import (
     Any,
     Dict,
     Generator,
+    Generic,
     Optional,
     Sequence,
     Tuple,
     Type,
+    TypeVar,
     cast,
 )
 
@@ -44,22 +46,26 @@ from qualibrate.utils.type_protocols import (
     TargetType,
 )
 
-__all__ = ["QualibrationNode"]
+__all__ = ["QualibrationNode", "NodeCreateParametersType"]
 
-NodeCreateParametersType = NodeParameters
+NodeCreateParametersType = TypeVar(
+    "NodeCreateParametersType", bound=NodeParameters
+)
+
+external_parameters_ctx: ContextVar[  # type: ignore
+    Optional[Tuple[str, NodeCreateParametersType]]
+] = ContextVar("external_parameters", default=None)
+last_executed_node_ctx: ContextVar[  # type: ignore
+    Optional["QualibrationNode[NodeCreateParametersType]"]
+] = ContextVar("last_executed_node", default=None)
+
 NodeRunParametersType = NodeParameters
 QNodeBaseType = QRunnable[NodeCreateParametersType, NodeRunParametersType]
-
-external_parameters_ctx: ContextVar[Optional[Tuple[str, NodeParameters]]] = (
-    ContextVar("external_parameters", default=None)
-)
-last_executed_node_ctx: ContextVar[Optional["QualibrationNode"]] = ContextVar(
-    "last_executed_node", default=None
-)
 
 
 class QualibrationNode(
     QRunnable[NodeCreateParametersType, NodeRunParametersType],
+    Generic[NodeCreateParametersType],
 ):
     """
     Represents a qualibration node (that can be run independently or as part
@@ -171,7 +177,7 @@ class QualibrationNode(
                     for name, info in fields.items()
                 },
             )
-            return cast(NodeParameters, new_model())
+            return cast(NodeCreateParametersType, new_model())
         logger.warning(
             "parameters_class argument is deprecated. Please use "
             f"parameters argument for initializing node '{name}'."
@@ -183,7 +189,7 @@ class QualibrationNode(
                 f"Can't instantiate parameters class of node '{name}'"
             ) from e
 
-    def __copy__(self) -> "QualibrationNode":
+    def __copy__(self) -> "QualibrationNode[NodeCreateParametersType]":
         """
         Creates a shallow copy of the node.
 
@@ -204,7 +210,7 @@ class QualibrationNode(
 
     def copy(
         self, name: Optional[str] = None, **node_parameters: Any
-    ) -> "QualibrationNode":
+    ) -> "QualibrationNode[NodeCreateParametersType]":
         """
         Creates a modified copy of the node with updated parameters.
 
@@ -314,7 +320,7 @@ class QualibrationNode(
 
     def _post_run(
         self,
-        last_executed_node: "QualibrationNode",
+        last_executed_node: "QualibrationNode[NodeCreateParametersType]",
         created_at: datetime,
         initial_targets: Sequence[TargetType],
         parameters: NodeParameters,
@@ -373,7 +379,7 @@ class QualibrationNode(
 
     def run(
         self, interactive: bool = True, **passed_parameters: Any
-    ) -> Tuple["QualibrationNode", BaseRunSummary]:
+    ) -> Tuple["QualibrationNode[NodeCreateParametersType]", BaseRunSummary]:
         """
         Runs the node with given parameters, potentially interactively.
 
@@ -589,7 +595,9 @@ class QualibrationNode(
                 setattr(cls, "__setitem__", setitem_func)
 
     @classmethod
-    def scan_folder_for_instances(cls, path: Path) -> Dict[str, QNodeBaseType]:
+    def scan_folder_for_instances(
+        cls, path: Path
+    ) -> Dict[str, QNodeBaseType[NodeCreateParametersType]]:
         """
         Scans a directory for node instances and returns them.
 
@@ -604,7 +612,7 @@ class QualibrationNode(
             Dict[str, QualibrationNode]: A dictionary of node names to their
             corresponding node instances.
         """
-        nodes: Dict[str, QNodeBaseType] = {}
+        nodes: Dict[str, QNodeBaseType[NodeCreateParametersType]] = {}
         if run_modes_ctx.get() is not None:
             logger.error(
                 "Run modes context is already set to %s",
@@ -629,7 +637,9 @@ class QualibrationNode(
 
     @classmethod
     def scan_node_file(
-        cls, file: Path, nodes: Dict[str, QNodeBaseType]
+        cls,
+        file: Path,
+        nodes: Dict[str, QNodeBaseType[NodeCreateParametersType]],
     ) -> None:
         """
         Scans a node file and adds its instance to the provided dictionary.
@@ -651,7 +661,9 @@ class QualibrationNode(
             # TODO Think of a safer way to execute the code
             _module = import_from_path(get_module_name(file), file)
         except StopInspection as ex:
-            node = cast("QualibrationNode", ex.instance)
+            node = cast(
+                "QualibrationNode[NodeCreateParametersType]", ex.instance
+            )
             node.filepath = file
             node.modes.inspection = False
             cls.add_node(node, nodes)
@@ -659,8 +671,8 @@ class QualibrationNode(
     @classmethod
     def add_node(
         cls,
-        node: "QualibrationNode",
-        nodes: Dict[str, QNodeBaseType],
+        node: "QualibrationNode[NodeCreateParametersType]",
+        nodes: Dict[str, QNodeBaseType[NodeCreateParametersType]],
     ) -> None:
         """
         Adds a node instance to the node dictionary.
@@ -681,7 +693,7 @@ class QualibrationNode(
 
 
 def _record_state_update(
-    node: Optional[QualibrationNode],
+    node: Optional[QualibrationNode[NodeCreateParametersType]],
     reference: str,
     attr: str,
     old: Any,
@@ -722,7 +734,7 @@ def _record_state_update_getattr(
     quam_obj: GetRefProtocol,
     attr: str,
     val: Any = None,
-    node: Optional[QualibrationNode] = None,
+    node: Optional[QualibrationNode[NodeCreateParametersType]] = None,
 ) -> None:
     """
     Records item state updates in a Quam collection object.
@@ -745,7 +757,7 @@ def _record_state_update_getitem(
     quam_obj: GetRefGetItemProtocol,
     attr: str,
     val: Any = None,
-    node: Optional[QualibrationNode] = None,
+    node: Optional[QualibrationNode[NodeCreateParametersType]] = None,
 ) -> None:
     """
     Records item state updates in a Quam collection object.

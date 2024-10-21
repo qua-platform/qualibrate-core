@@ -8,7 +8,10 @@ from qualibrate.storage.storage_manager import StorageManager
 from qualibrate.utils.logger_m import logger
 
 if TYPE_CHECKING:
-    from qualibrate.qualibration_node import QualibrationNode
+    from qualibrate.qualibration_node import (
+        NodeCreateParametersType,
+        QualibrationNode,
+    )
 
 
 class LocalStorageManager(StorageManager):
@@ -36,7 +39,7 @@ class LocalStorageManager(StorageManager):
         self.active_machine_path = active_machine_path
         self.snapshot_idx = None
 
-    def save(self, node: "QualibrationNode") -> None:
+    def save(self, node: "QualibrationNode[NodeCreateParametersType]") -> None:
         """
         Saves the state of the specified node to local storage.
 

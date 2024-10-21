@@ -5,7 +5,7 @@ from typing import Any, Optional, Sequence
 
 import networkx as nx
 
-from qualibrate import QualibrationGraph, QualibrationNode
+from qualibrate import NodeParameters, QualibrationGraph, QualibrationNode
 from qualibrate.models.execution_history import ExecutionHistoryItem
 from qualibrate.models.node_status import NodeStatus
 from qualibrate.models.outcome import Outcome
@@ -37,7 +37,7 @@ class BasicOrchestrator(QualibrationOrchestrator):
 
         """
         super().__init__(skip_failed=skip_failed)
-        self._execution_queue: Queue[QualibrationNode] = Queue()
+        self._execution_queue: Queue[QualibrationNode[NodeParameters]] = Queue()
 
     def _is_execution_finished(self) -> bool:
         """
@@ -70,7 +70,7 @@ class BasicOrchestrator(QualibrationOrchestrator):
             self._execution_queue.queue.clear()
 
     @property
-    def nx_graph(self) -> "nx.DiGraph[QualibrationNode]":
+    def nx_graph(self) -> "nx.DiGraph[QualibrationNode[NodeParameters]]":
         """
         Gets the networkx representation of the graph.
 
@@ -84,7 +84,9 @@ class BasicOrchestrator(QualibrationOrchestrator):
             raise ValueError("Graph is not specified")
         return self._graph._graph
 
-    def check_node_successful(self, node: QualibrationNode) -> bool:
+    def check_node_successful(
+        self, node: QualibrationNode[NodeParameters]
+    ) -> bool:
         """
         Checks if a node was successfully executed.
 
@@ -101,7 +103,7 @@ class BasicOrchestrator(QualibrationOrchestrator):
             == NodeStatus.successful
         )
 
-    def get_next_node(self) -> Optional[QualibrationNode]:
+    def get_next_node(self) -> Optional[QualibrationNode[NodeParameters]]:
         """
         Gets the next node to execute.
 

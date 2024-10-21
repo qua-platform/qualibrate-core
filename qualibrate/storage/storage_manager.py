@@ -2,7 +2,10 @@ from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
-    from qualibrate.qualibration_node import QualibrationNode
+    from qualibrate.qualibration_node import (
+        NodeCreateParametersType,
+        QualibrationNode,
+    )
 
 
 class StorageManager(ABC):
@@ -17,7 +20,7 @@ class StorageManager(ABC):
     snapshot_idx: Optional[int] = None
 
     @abstractmethod
-    def save(self, node: "QualibrationNode") -> None:
+    def save(self, node: "QualibrationNode[NodeCreateParametersType]") -> None:
         """
         Saves the current state of the provided node.
 
