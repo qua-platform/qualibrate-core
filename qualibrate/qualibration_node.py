@@ -18,6 +18,12 @@ from typing import (
 import matplotlib
 from matplotlib.rcsetup import interactive_bk
 from pydantic import ValidationError, create_model
+from qualibrate_config.resolvers import (
+    get_active_machine_config_path,
+    get_active_machine_settings,
+    get_qualibrate_config_path,
+    get_qualibrate_settings,
+)
 
 from qualibrate.models.outcome import Outcome
 from qualibrate.models.run_mode import RunModes
@@ -294,22 +300,18 @@ class QualibrationNode(
             ImportError: Raised if required configurations are not accessible.
         """
         if self.storage_manager is None:
-            # TODO: fully depend on qualibrate. Need to remove this dependency.
             msg = (
                 "Node.storage_manager should be defined to save node, "
                 "resorting to default configuration"
             )
             logger.warning(msg)
-            if find_spec("qualibrate_app") is None:
-                logger.warning("Can't import qualibrate_app for saving node")
-                return
-            from qualibrate_app.config import get_config_path, get_settings
-
-            config_path = get_config_path()
-            settings = get_settings(config_path)
+            am_config_path = get_active_machine_config_path()
+            q_config_path = get_qualibrate_config_path()
+            ams = get_active_machine_settings(am_config_path)
+            qs = get_qualibrate_settings(q_config_path)
             self.storage_manager = LocalStorageManager(
-                root_data_folder=settings.qualibrate.storage.location,
-                active_machine_path=settings.active_machine.path,
+                root_data_folder=cast(Path, qs.storage.location),
+                active_machine_path=cast(Optional[Path], ams.path),
             )
         self.storage_manager.save(
             node=cast("QualibrationNode[NodeParameters]", self)

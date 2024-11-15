@@ -3,13 +3,13 @@ from collections.abc import Mapping
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from types import TracebackType
-from typing import Optional, Union
+from typing import Optional, Union, cast
 
-try:
-    from qualibrate_app.config import get_config_path, get_settings
-except ImportError:
-    get_config_path = None
-    get_settings = None
+from qualibrate_config.resolvers import (
+    get_qualibrate_config_path,
+    get_qualibrate_settings,
+)
+from qualibrate_config.storage import STORAGE
 
 _SysExcInfoType = Union[
     tuple[type[BaseException], BaseException, Optional[TracebackType]],
@@ -75,14 +75,9 @@ class LazyInitLogger(logging.Logger):
 
     @staticmethod
     def get_log_filepath() -> Path:
-        log_folder = None
-        if get_config_path is not None and get_settings is not None:
-            try:
-                config_path = get_config_path()
-                settings = get_settings(config_path)
-                log_folder = settings.qualibrate.log_folder
-            except AttributeError:
-                log_folder = None
+        q_config_path = get_qualibrate_config_path()
+        qs = get_qualibrate_settings(q_config_path, STORAGE)
+        log_folder = cast(Path, qs.log_folder)
         if log_folder is None:
             log_folder = Path().home().joinpath(".qualibrate", "logs")
         log_folder.mkdir(parents=True, exist_ok=True)
