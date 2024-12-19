@@ -9,17 +9,20 @@ packages = [{ include = "qualibrate" }]
 [tool.poetry.dependencies]
 python = "^3.9"
 pydantic = "^2.7.3"
-qualang_tools = { version = ">0.17.4", python = ">=3.9,<3.12" }
+qualang-tools = { version = ">0.17.4", python = ">=3.9,<3.12" }
 networkx = "~3.2.0"                                             # max available version with python 3.9 support
 jsonpointer = "^3.0.0"
 types-networkx = "~3.2.1.20240918"
 datamodel-code-generator = "^0.26.3"
+qualibrate-config = {path = "../qualibrate-config", develop = true}
+matplotlib = "^3.9.4"
 
 
 [tool.poetry.group.test.dependencies]
 pytest = "^8.2.2"
 pytest-mock = "^3.14.0"
-quam = { version = "^0.3.5", python = ">=3.9,<3.12" }
+# TODO: remove upper bound when add support of 3.12
+quam = { version = "^0.3.5,<0.3.8", python = ">=3.9,<3.12" }
 xarray = "^2024.1.0,<2024.09.0"
 pillow = "^11.0.0"
 setuptools = "^75.1.0"                                # it's required for qm -> betterproto -> pkg_resources (contains in setuptools)
@@ -60,8 +63,6 @@ module = [
     "qualang_tools.*",
     "quam.*",
     "jsonpointer",
-    "qualibrate_app.config",
-    "qualibrate_runner.config",
 ]
 ignore_missing_imports = true
 
