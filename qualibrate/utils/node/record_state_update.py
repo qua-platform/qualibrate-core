@@ -74,6 +74,14 @@ def record_state_update_getattr(
         node: The node where the state update will be recorded. Defaults to
             None.
     """
+    if getattr(quam_obj, "parent", None) is None:
+        object.__setattr__(quam_obj, attr, val)
+        return
+
+    elif not hasattr(quam_obj, attr):
+        object.__setattr__(quam_obj, attr, val)
+        return
+
     _record_state_update(
         node, quam_obj.get_reference(attr), attr, getattr(quam_obj, attr), val
     )
@@ -97,6 +105,12 @@ def record_state_update_getitem(
         node: The node where the state update will be recorded. Defaults to
             None.
     """
-    _record_state_update(
-        node, quam_obj.get_reference(attr), attr, quam_obj[attr], val
-    )
+    if getattr(quam_obj, "parent", None) is None:
+        UserDict.__setitem__(quam_obj, attr, val)
+        return
+
+    if attr not in quam_obj:
+        UserDict.__setitem__(quam_obj, attr, val)
+        return
+
+    _record_state_update(node, quam_obj.get_reference(attr), attr, quam_obj[attr], val)
