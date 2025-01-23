@@ -108,6 +108,12 @@ class QRunnable(ABC, Generic[CreateParametersType, RunParametersType]):
             __module__=parameters.__class__.__module__,
             **{name: (info.annotation, info) for name, info in fields.items()},
         )
+
+        # Copy methods from the original class
+        for method_name, method in parameters.__class__.__dict__.items():
+            if callable(method) and not method_name.startswith('__'):
+                setattr(model, method_name, method)
+
         if hasattr(parameters, "targets_name"):
             model.targets_name = parameters.targets_name
         return cast(type[CreateParametersType], model)
