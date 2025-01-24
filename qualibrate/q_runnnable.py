@@ -111,7 +111,7 @@ class QRunnable(ABC, Generic[CreateParametersType, RunParametersType]):
 
         # Copy methods from the original class
         for method_name, method in parameters.__class__.__dict__.items():
-            if callable(method) and not method_name.startswith('__'):
+            if callable(method) and not method_name.startswith("__"):
                 setattr(model, method_name, method)
 
         if hasattr(parameters, "targets_name"):
