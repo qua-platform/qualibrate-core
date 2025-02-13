@@ -67,8 +67,15 @@ class LocalStorageManager(StorageManager[NodeTypeVar], Generic[NodeTypeVar]):
 
         # Save results
         self.data_handler.name = node.name
+        # "quam_state.json" even if node.machine is None
+        quam_filename = (
+            "quam_state2.json"
+            if isinstance(node.machine, dict)
+            else "quam_state.json"
+        )
+
         DataHandler.node_data = {
-            "quam": "./quam_state.json",
+            "quam": os.path.join(".", quam_filename),
             "parameters": {
                 "model": node.parameters.model_dump(mode="json"),
                 "schema": node.parameters.__class__.model_json_schema(),
@@ -103,13 +110,13 @@ class LocalStorageManager(StorageManager[NodeTypeVar], Generic[NodeTypeVar]):
 
         # Save QuAM to the data folder
         if isinstance(node.machine, dict):
-            quam_path = self.data_handler.path / "quam_state2.json"
+            quam_path = self.data_handler.path / quam_filename
             quam_path.write_text(
                 json.dumps(node.machine, indent=4, sort_keys=True)
             )
         else:
             # Save as single file
-            node.machine.save(path=self.data_handler.path / "quam_state.json")
+            node.machine.save(path=self.data_handler.path / quam_filename)
             # Save as folder with wiring and network separated
             if content_mapping is not None:
                 node.machine.save(

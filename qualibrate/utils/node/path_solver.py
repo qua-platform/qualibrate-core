@@ -60,6 +60,8 @@ def get_node_quam_filepath(
         file, or None if the file is not found.
     """
     quam_relative_path = node_data.get("quam", "./state.json")
+    if quam_relative_path.startswith("./"):
+        quam_relative_path = quam_relative_path[2:]
     quam_file_path = resolve_and_check_relative(
         node_dir, Path(quam_relative_path)
     )
