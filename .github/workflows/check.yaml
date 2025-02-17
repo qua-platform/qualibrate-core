@@ -7,7 +7,7 @@ on:
   pull_request
 
 jobs:
-  check:
+  type-lint-format:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -32,6 +32,29 @@ jobs:
 
       - name: Check format python package
         run: poetry run poe format
+
+  test:
+    strategy:
+      matrix:
+        os: [ ubuntu-latest, windows-latest ]
+    runs-on:
+      - ${{ matrix.os }}
+    needs: type-lint-format
+    if: ${{ (matrix.os == 'ubuntu-latest') || (github.event.pull_request.merged == true)}}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install poetry
+        run: pipx install poetry
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+          cache: "poetry"
+          cache-dependency-path: poetry.lock
+
+      - name: Install python deps
+        run: poetry install --with dev --with test
 
       - name: Run tests
         run: poetry run pytest
