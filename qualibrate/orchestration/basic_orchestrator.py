@@ -165,7 +165,7 @@ class BasicOrchestrator(
                 logger.exception("", exc_info=exc)
                 raise exc
             node_to_run_parameters = getattr(nodes_parameters, node_to_run.name)
-            run_start = datetime.now()
+            run_start = datetime.now().astimezone()
             run_error: Optional[RunError] = None
             try:
                 self._active_node = node_to_run
@@ -204,14 +204,19 @@ class BasicOrchestrator(
                 self._execution_history.append(
                     ExecutionHistoryItem(
                         name=executed_node.name,
-                        description=executed_node.description,
-                        snapshot_idx=executed_node.snapshot_idx,
-                        outcomes=executed_node.outcomes,
-                        status=new_status,
-                        error=run_error,
-                        run_start=run_start,
-                        run_end=datetime.now(),
-                        parameters=executed_node._parameters,
+                        id=executed_node.snapshot_idx,
+                        created_at=run_start,
+                        metadata=dict(
+                            description=executed_node.description,
+                            status=new_status,
+                            run_start=run_start,
+                            run_end=datetime.now().astimezone(),
+                        ),
+                        data=dict(
+                            parameters=executed_node._parameters,
+                            outcomes=executed_node.outcomes,
+                            error=run_error,
+                        ),
                     )
                 )
             # Suppose that all nodes are successfully finish
