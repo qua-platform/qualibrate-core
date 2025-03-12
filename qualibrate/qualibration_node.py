@@ -1,3 +1,4 @@
+import logging
 import traceback
 from collections.abc import Generator, Mapping, Sequence
 from contextlib import contextmanager
@@ -48,7 +49,10 @@ from qualibrate.runnables.run_action.action_manager import (
 from qualibrate.storage import StorageManager
 from qualibrate.storage.local_storage_manager import LocalStorageManager
 from qualibrate.utils.exceptions import StopInspection
-from qualibrate.utils.logger_m import logger
+from qualibrate.utils.logger_m import (
+    ALLOWED_LOG_LEVEL_NAMES,
+    LOG_LEVEL_NAMES_TYPE,
+)
 from qualibrate.utils.node.comined_method import InstanceOrClassMethod
 from qualibrate.utils.node.content import (
     parse_node_content,
@@ -87,6 +91,8 @@ external_parameters_ctx: ContextVar[Optional[NodeContext]] = ContextVar(
 last_executed_node_ctx: ContextVar[Optional["QualibrationNode[Any, Any]"]] = (
     ContextVar("last_executed_node", default=None)
 )
+
+logger = logging.getLogger(__name__)
 
 
 class QualibrationNode(
