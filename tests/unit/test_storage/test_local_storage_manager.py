@@ -7,7 +7,7 @@ import pytest
 from pydantic import BaseModel
 
 from qualibrate.models.outcome import Outcome
-from qualibrate.storage.local_storage_manager import LocalStorageManager
+from qualibrate.storage.local_storage_manager import LocalStorageManager, logger
 
 
 class Parameters(BaseModel):
@@ -73,7 +73,7 @@ def test_save_node_without_machine(
     mocker, mock_data_handler, mock_generate, local_manager_root
 ):
     node = DummyNode()
-    mock_logger = mocker.patch("qualibrate.utils.logger_m.logger.info")
+    mock_logger = mocker.patch.object(logger, "info")
 
     local_manager_root.save(node)
 
@@ -138,7 +138,7 @@ def test_save_node_outcomes(
     mocker, mock_data_handler, mock_generate, local_manager_root, outcomes
 ):
     node = DummyNode(outcomes=outcomes)
-    mock_logger = mocker.patch("qualibrate.utils.logger_m.logger.info")
+    mock_logger = mocker.patch.object(logger, "info")
 
     local_manager_root.save(node)
 
