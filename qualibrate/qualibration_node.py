@@ -1,19 +1,27 @@
+import copy
+import sys
 import traceback
 from collections.abc import Generator, Mapping, Sequence
 from contextlib import contextmanager
-from contextvars import ContextVar
-from copy import copy
 from datetime import datetime
 from functools import partialmethod
 from importlib.util import find_spec
 from pathlib import Path
 from typing import (
     Any,
+    Generic,
     Optional,
     TypeVar,
     Union,
     cast,
 )
+
+from qualibrate.runnables.runnable_collection import RunnableCollection
+
+if sys.version_info < (3, 11):
+    from typing_extensions import Self
+else:
+    from typing import Self
 
 import matplotlib
 from matplotlib.backends import (  # type: ignore[attr-defined]
@@ -26,6 +34,7 @@ from qualibrate_config.resolvers import (
     get_qualibrate_config_path,
 )
 
+from qualibrate.config.resolvers import get_quam_state_path
 from qualibrate.models.outcome import Outcome
 from qualibrate.models.run_mode import RunModes
 from qualibrate.models.run_summary.base import BaseRunSummary
@@ -36,6 +45,11 @@ from qualibrate.q_runnnable import (
     QRunnable,
     file_is_calibration_instance,
     run_modes_ctx,
+)
+from qualibrate.runnables.run_action.action import ActionCallableType
+from qualibrate.runnables.run_action.action_manager import (
+    ActionDecoratorType,
+    ActionManager,
 )
 from qualibrate.storage import StorageManager
 from qualibrate.storage.local_storage_manager import LocalStorageManager
@@ -67,18 +81,12 @@ __all__ = [
 NodeCreateParametersType = NodeParameters
 NodeRunParametersType = NodeParameters
 ParametersType = TypeVar("ParametersType", bound=NodeParameters)
-
-# TODO: use node parameters type instead of Any
-external_parameters_ctx: ContextVar[Optional[tuple[str, Any]]] = ContextVar(
-    "external_parameters", default=None
-)
-last_executed_node_ctx: ContextVar[Optional["QualibrationNode[Any]"]] = (
-    ContextVar("last_executed_node", default=None)
-)
+MachineType = TypeVar("MachineType")
 
 
 class QualibrationNode(
-    QRunnable[ParametersType, NodeRunParametersType],
+    QRunnable[ParametersType, ParametersType],
+    Generic[ParametersType, MachineType],
 ):
     """
     Represents a qualibration node (that can be run independently or as part
@@ -98,9 +106,14 @@ class QualibrationNode(
         StopInspection: Raised if the node is instantiated in inspection mode.
     """
 
-    storage_manager: Optional[
-        StorageManager["QualibrationNode[NodeParameters]"]
-    ] = None
+    active_node: Optional["QualibrationNode[ParametersType, Any]"] = None
+
+    def __new__(
+        cls, *args: Any, **kwargs: Any
+    ) -> "QualibrationNode[ParametersType, Any]":
+        if cls.active_node is not None:
+            return cls.active_node
+        return super().__new__(cls)
 
     def __init__(
         self,
@@ -111,6 +124,8 @@ class QualibrationNode(
         parameters_class: Optional[type[ParametersType]] = None,
         modes: Optional[RunModes] = None,
     ):
+        if self.__class__.active_node is not None:
+            return
         logger.info(f"Creating node {name}")
         parameters = self.__class__._validate_passed_parameters_options(
             name, parameters, parameters_class
@@ -121,23 +136,26 @@ class QualibrationNode(
             description=description,
             modes=modes,
         )
-
+        # class is used just for passing reference to the running instance
+        self._fraction_complete = 0.0
         self.results: dict[Any, Any] = {}
-        self.machine = None
+        self.machine: Optional[MachineType] = None
+        self.storage_manager: Optional[StorageManager[Self]] = None
 
+        # Initialize the ActionManager to handle run_action logic.
+        self._action_manager = ActionManager()
+        self.namespace: dict[str, Any] = {}
         if self.modes.inspection:
             raise StopInspection(
                 "Node instantiated in inspection mode", instance=self
             )
+        self._post_init()
 
-        last_executed_node_ctx.set(self)
+    def _post_init(self) -> None:
+        self.run_start = datetime.now().astimezone()
+        self._get_storage_manager()
 
         self._warn_if_external_and_interactive_mpl()
-
-        external_parameters = external_parameters_ctx.get()
-        if external_parameters is not None:
-            self.name = external_parameters[0]
-            self._parameters = external_parameters[1]
 
     @classmethod
     def _validate_passed_parameters_options(
@@ -147,7 +165,9 @@ class QualibrationNode(
         parameters_class: Optional[type[ParametersType]],
     ) -> ParametersType:
         """
-        Validates passed parameters and parameters class. If parameters
+        Validates passed parameters and parameters class.
+
+        If parameters
         passed then the instance will be used. If parameters class is passed,
         an attempt will be made to instantiate it. If neither parameters nor
         parameter class are passed, then the default base parameters will be
@@ -164,7 +184,12 @@ class QualibrationNode(
         Raises:
             ValueError: If parameters class instantiation fails.
         """
+        params_type_error = ValueError(
+            "Node parameters must be of type NodeParameters"
+        )
         if parameters is not None:
+            if not isinstance(parameters, NodeParameters):
+                raise params_type_error
             if parameters_class is not None:
                 logger.warning(
                     "Passed both parameters and parameters_class to the node "
@@ -173,7 +198,7 @@ class QualibrationNode(
             return parameters
         if parameters_class is None:
             fields = {
-                name: copy(field)
+                name: copy.copy(field)
                 for name, field in NodeParameters.model_fields.items()
             }
             # Create subclass of NodeParameters. It's needed because otherwise
@@ -194,6 +219,8 @@ class QualibrationNode(
             "parameters_class argument is deprecated. Please use "
             f"parameters argument for initializing node '{name}'."
         )
+        if not issubclass(parameters_class, NodeParameters):
+            raise params_type_error
         try:
             return parameters_class()
         except ValidationError as e:
@@ -201,7 +228,7 @@ class QualibrationNode(
                 f"Can't instantiate parameters class of node '{name}'"
             ) from e
 
-    def __copy__(self) -> "QualibrationNode[ParametersType]":
+    def __copy__(self) -> Self:
         """
         Creates a shallow copy of the node.
 
@@ -213,16 +240,22 @@ class QualibrationNode(
             A copy of the node.
         """
         modes = self.modes.model_copy(update={"inspection": False})
-        instance = self.__class__(
-            self.name, self.parameters_class(), self.description, modes=modes
-        )
-        instance.modes.inspection = self.modes.inspection
-        instance.filepath = self.filepath
-        return instance
+        active_node = self.__class__.active_node
+        try:
+            self.__class__.active_node = None
+            instance = self.__class__(
+                self.name,
+                self.parameters_class(),
+                self.description,
+                modes=modes,
+            )
+            instance.modes.inspection = self.modes.inspection
+            instance.filepath = self.filepath
+            return instance
+        finally:
+            self.__class__.active_node = active_node
 
-    def copy(
-        self, name: Optional[str] = None, **node_parameters: Any
-    ) -> "QualibrationNode[ParametersType]":
+    def copy(self, name: Optional[str] = None, **node_parameters: Any) -> Self:
         """
         Creates a modified copy of the node with updated parameters.
 
@@ -254,6 +287,8 @@ class QualibrationNode(
         instance._parameters = instance.parameters_class.model_validate(
             node_parameters
         )
+        # Base class is inherited from user passed model so don't use passed
+        # class as base for copied parameters class
         instance.parameters_class = self.build_parameters_class_from_instance(
             instance._parameters
         )
@@ -303,6 +338,42 @@ class QualibrationNode(
             return None
         return self.storage_manager.snapshot_idx
 
+    def run_action(
+        self,
+        func: Optional[ActionCallableType] = None,
+        *,
+        skip_if: bool = False,
+    ) -> ActionDecoratorType:
+        """
+        Convenience method that returns the run_action decorator
+        provided by the ActionManager.
+
+        Usage examples:
+
+            @node.run_action
+            def action1(node):
+                # action code
+
+            @node.run_action(skip_if=True)
+            def action2(node):
+                # action code; this action is skipped if
+                # skip_if is True.
+        """
+        return self._action_manager.register_action(self, func, skip_if=skip_if)
+
+    def _get_storage_manager(self) -> StorageManager[Self]:
+        if self.storage_manager is not None:
+            return self.storage_manager
+        q_config_path = get_qualibrate_config_path()
+        qs = get_qualibrate_config(q_config_path)
+        state_path = get_quam_state_path(qs)
+        self.storage_manager = LocalStorageManager[Self](
+            root_data_folder=qs.storage.location,
+            active_machine_path=state_path,
+        )
+        self.storage_manager.get_snapshot_idx(self)
+        return self.storage_manager
+
     def save(self) -> None:
         """
         Saves the current state of the node to the storage manager.
@@ -313,20 +384,7 @@ class QualibrationNode(
         Raises:
             ImportError: Raised if required configurations are not accessible.
         """
-        if self.storage_manager is None:
-            msg = (
-                "Node.storage_manager should be defined to save node, "
-                "resorting to default configuration"
-            )
-            logger.warning(msg)
-            q_config_path = get_qualibrate_config_path()
-            qs = get_qualibrate_config(q_config_path)
-            self.storage_manager = LocalStorageManager(
-                root_data_folder=qs.storage.location,
-            )
-        self.storage_manager.save(
-            node=cast("QualibrationNode[NodeParameters]", self)
-        )
+        self._get_storage_manager().save(node=self)
 
     def _load_from_id(
         self,
@@ -334,7 +392,7 @@ class QualibrationNode(
         base_path: Optional[Path] = None,
         custom_loaders: Optional[Sequence[type[BaseLoader]]] = None,
         build_params_class: bool = False,
-    ) -> Optional["QualibrationNode[ParametersType]"]:
+    ) -> Optional[Self]:
         """
         Loads a node by its identifier, parsing its content and data.
 
@@ -390,13 +448,13 @@ class QualibrationNode(
     @InstanceOrClassMethod
     def load_from_id(
         caller: Union[
-            "QualibrationNode[ParametersType]",
-            type["QualibrationNode[ParametersType]"],
+            "QualibrationNode[ParametersType, MachineType]",
+            type["QualibrationNode[ParametersType, MachineType]"],
         ],
         node_id: int,
         base_path: Optional[Path] = None,
         custom_loaders: Optional[Sequence[type[BaseLoader]]] = None,
-    ) -> Optional["QualibrationNode[ParametersType]"]:
+    ) -> Optional["QualibrationNode[ParametersType, MachineType]"]:
         """
         Class or instance method to load a node by its identifier.
 
@@ -414,7 +472,7 @@ class QualibrationNode(
             A `QualibrationNode` instance with the loaded data, or None if
             loading fails.
         """
-        instance: QualibrationNode[ParametersType] = (
+        instance: QualibrationNode[ParametersType, MachineType] = (
             caller(name=f"loaded_from_id_{node_id}")
             if isinstance(caller, type)
             else caller
@@ -428,8 +486,6 @@ class QualibrationNode(
 
     def _post_run(
         self,
-        last_executed_node: "QualibrationNode[ParametersType]",
-        created_at: datetime,
         initial_targets: Sequence[TargetType],
         parameters: NodeParameters,
         run_error: Optional[RunError],
@@ -452,20 +508,21 @@ class QualibrationNode(
         Returns:
             A summary object containing execution details.
         """
-        outcomes = last_executed_node.outcomes
+        outcomes = self.outcomes
+        self._action_manager.current_action = None
         if self.parameters is not None and (targets := self.parameters.targets):
             lost_targets_outcomes = set(targets) - set(outcomes.keys())
             outcomes.update(
                 {target: Outcome.SUCCESSFUL for target in lost_targets_outcomes}
             )
-        self.outcomes = last_executed_node.outcomes = {
+        self.outcomes = {
             name: Outcome(outcome) for name, outcome in outcomes.items()
         }
         self.run_summary = NodeRunSummary(
             name=self.name,
             description=self.description,
-            created_at=created_at,
-            completed_at=datetime.now(),
+            created_at=self.run_start,
+            completed_at=datetime.now().astimezone(),
             initial_targets=initial_targets,
             parameters=parameters,
             outcomes=self.outcomes,
@@ -486,8 +543,12 @@ class QualibrationNode(
         return self.run_summary
 
     def run(
-        self, interactive: bool = True, **passed_parameters: Any
-    ) -> tuple["QualibrationNode[ParametersType]", BaseRunSummary]:
+        self,
+        interactive: bool = True,
+        *,
+        skip_actions: Union[bool, Sequence[str]] = False,
+        **passed_parameters: Any,
+    ) -> BaseRunSummary:
         """
         Runs the node with given parameters, potentially interactively.
 
@@ -498,6 +559,8 @@ class QualibrationNode(
 
         Args:
             interactive: Whether the node should be run interactively.
+            skip_actions: An optional sequence of actions to skip when running.
+                Also, possible to pass `True` to skip all actions.
             **passed_parameters: Additional parameters to pass when
                 running the node.
 
@@ -512,6 +575,7 @@ class QualibrationNode(
         logger.info(
             f"Run node {self.name} with parameters: {passed_parameters}"
         )
+        self._fraction_complete = 0
         if self.filepath is None:
             ex = RuntimeError(f"Node {self.name} file path was not provided")
             logger.exception("", exc_info=ex)
@@ -521,8 +585,10 @@ class QualibrationNode(
         )
         params_dict.update(passed_parameters)
         parameters = self.parameters.model_validate(params_dict)
-        initial_targets = copy(parameters.targets) if parameters.targets else []
-        created_at = datetime.now()
+        initial_targets = (
+            copy.copy(parameters.targets) if parameters.targets else []
+        )
+        self.run_start = datetime.now().astimezone()
         run_error: Optional[RunError] = None
 
         if run_modes_ctx.get() is not None:
@@ -530,14 +596,17 @@ class QualibrationNode(
                 "Run modes context is already set to %s",
                 run_modes_ctx.get(),
             )
-        run_modes_token = run_modes_ctx.set(
-            RunModes(external=True, interactive=interactive, inspection=False)
+        new_run_modes = RunModes(
+            external=True, interactive=interactive, inspection=False
         )
-        external_parameters_token = external_parameters_ctx.set(
-            (self.name, parameters)
-        )
+        run_modes_token = run_modes_ctx.set(new_run_modes)
+        modes = self.modes.model_copy()
         try:
             self._parameters = parameters
+            self.modes = new_run_modes
+            self.__class__.active_node = self
+            self._action_manager.skip_actions = skip_actions
+
             self.run_node_file(self.filepath)
         except Exception as ex:
             run_error = RunError(
@@ -545,27 +614,22 @@ class QualibrationNode(
                 message=str(ex),
                 traceback=traceback.format_tb(ex.__traceback__),
             )
-            logger.exception("", exc_info=ex)
+            logger.exception(f"Failed to run node {self.name}", exc_info=ex)
             raise
+        else:
+            self._fraction_complete = 1.0
         finally:
+            self._action_manager.skip_actions = False
             run_modes_ctx.reset(run_modes_token)
-            external_parameters_ctx.reset(external_parameters_token)
-            last_executed_node = last_executed_node_ctx.get()
-            if last_executed_node is None:
-                logger.warning(
-                    f"Last executed node not set after running {self}"
-                )
-                last_executed_node = self
-
+            self.modes = modes
+            self.__class__.active_node = None
             run_summary = self._post_run(
-                last_executed_node,
-                created_at,
                 initial_targets,
                 parameters,
                 run_error,
             )
 
-        return last_executed_node, run_summary
+        return run_summary
 
     def run_node_file(self, node_filepath: Path) -> None:
         """
@@ -605,14 +669,32 @@ class QualibrationNode(
         Returns:
             True if the node is successfully stopped, False otherwise.
         """
-        logger.debug(f"Stop node {self.name}")
+        active_node = self.__class__.active_node
+        # TODO: verify
+        assert active_node is self
+        if active_node is None:
+            logger.warning("No active node to stop")
+            return False
+        logger.info(f"Trying to stop node {active_node.name}")
+        job = getattr(active_node, "qm_job", None)
+        if job is not None and hasattr(job, "halt"):
+            job.halt()
+            logger.info(f"Node {active_node.name} stopped")
+            return True
+
+        logger.info(
+            "Could not find QualibrationNode.qm_job, trying to connect to "
+            "qmm to stop latest job"
+        )
         if find_spec("qm") is None:
             return False
-        qmm = getattr(self.machine, "qmm", None)
+        qmm = getattr(active_node.machine, "qmm", None)
         if not qmm:
-            if self.machine is None or not hasattr(self.machine, "connect"):
+            if active_node.machine is None or not hasattr(
+                active_node.machine, "connect"
+            ):
                 return False
-            qmm = self.machine.connect()
+            qmm = active_node.machine.connect()
         if hasattr(qmm, "list_open_qms"):
             ids = qmm.list_open_qms()
         elif hasattr(qmm, "list_open_quantum_machines"):
@@ -702,7 +784,7 @@ class QualibrationNode(
     @classmethod
     def scan_folder_for_instances(
         cls, path: Path
-    ) -> dict[str, QRunnable[ParametersType, NodeRunParametersType]]:
+    ) -> RunnableCollection[str, QRunnable[ParametersType, ParametersType]]:
         """
         Scans a directory for node instances and returns them.
 
@@ -716,7 +798,7 @@ class QualibrationNode(
         Returns:
             A dictionary of node names to their corresponding node instances.
         """
-        nodes: dict[str, QRunnable[ParametersType, NodeRunParametersType]] = {}
+        nodes: dict[str, QRunnable[ParametersType, ParametersType]] = {}
         if run_modes_ctx.get() is not None:
             logger.error(
                 "Run modes context is already set to %s",
@@ -737,13 +819,13 @@ class QualibrationNode(
 
         finally:
             run_modes_ctx.reset(run_modes_token)
-        return nodes
+        return RunnableCollection(nodes)
 
     @classmethod
     def scan_node_file(
         cls,
         file: Path,
-        nodes: dict[str, QRunnable[ParametersType, NodeRunParametersType]],
+        nodes: dict[str, QRunnable[ParametersType, ParametersType]],
     ) -> None:
         """
         Scans a node file and adds its instance to the provided dictionary.
@@ -764,7 +846,7 @@ class QualibrationNode(
             # TODO Think of a safer way to execute the code
             _module = import_from_path(get_module_name(file), file)
         except StopInspection as ex:
-            node = cast("QualibrationNode[ParametersType]", ex.instance)
+            node = cast("QualibrationNode[ParametersType, Any]", ex.instance)
             node.filepath = file
             node.modes.inspection = False
             cls.add_node(node, nodes)
@@ -772,8 +854,8 @@ class QualibrationNode(
     @classmethod
     def add_node(
         cls,
-        node: "QualibrationNode[ParametersType]",
-        nodes: dict[str, QRunnable[ParametersType, NodeRunParametersType]],
+        node: "QualibrationNode[ParametersType, MachineType]",
+        nodes: dict[str, QRunnable[ParametersType, ParametersType]],
     ) -> None:
         """
         Adds a node instance to the node dictionary.
@@ -791,6 +873,19 @@ class QualibrationNode(
             )
 
         nodes[node.name] = node
+
+    @property
+    def fraction_complete(self) -> float:
+        return self._fraction_complete
+
+    @fraction_complete.setter
+    def fraction_complete(self, value: float) -> None:
+        self._fraction_complete = max(min(value, 1.0), 0.0)
+
+    @property
+    def current_action_name(self) -> Optional[str]:
+        action = self._action_manager.current_action
+        return action.name if action else None
 
 
 if __name__ == "__main__":

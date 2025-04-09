@@ -1,3 +1,4 @@
+import copy
 import traceback
 from collections.abc import Mapping, Sequence
 from datetime import datetime
@@ -23,7 +24,6 @@ from qualibrate.models.run_summary.run_error import RunError
 from qualibrate.parameters import (
     ExecutionParameters,
     GraphParameters,
-    NodeParameters,
     NodesParameters,
 )
 from qualibrate.q_runnnable import (
@@ -32,7 +32,8 @@ from qualibrate.q_runnnable import (
     run_modes_ctx,
 )
 from qualibrate.qualibration_node import QualibrationNode
-from qualibrate.utils.exceptions import StopInspection
+from qualibrate.runnables.runnable_collection import RunnableCollection
+from qualibrate.utils.exceptions import StopInspection, TargetsFieldNotExist
 from qualibrate.utils.logger_m import logger
 from qualibrate.utils.read_files import get_module_name, import_from_path
 from qualibrate.utils.type_protocols import TargetType
@@ -44,7 +45,7 @@ if TYPE_CHECKING:
 
 __all__ = ["QGraphBaseType", "QualibrationGraph", "NodeTypeVar"]
 
-NodeTypeVar = TypeVar("NodeTypeVar", bound=QualibrationNode[NodeParameters])
+NodeTypeVar = TypeVar("NodeTypeVar", bound=QualibrationNode[Any, Any])
 GraphCreateParametersType = GraphParameters
 GraphRunParametersType = ExecutionParameters
 QGraphBaseType = QRunnable[GraphCreateParametersType, GraphRunParametersType]
@@ -94,6 +95,8 @@ class QualibrationGraph(
         *,
         modes: Optional[RunModes] = None,
     ):
+        if not isinstance(parameters, GraphParameters):
+            raise ValueError("Graph parameters must be of type GraphParameters")
         super().__init__(name, parameters, description=description, modes=modes)
         self._nodes = self._validate_nodes_names_mapping(nodes)
         self._connectivity = connectivity
@@ -110,6 +113,66 @@ class QualibrationGraph(
             raise StopInspection(
                 "Graph instantiated in inspection mode", instance=self
             )
+        self.run_start = datetime.now().astimezone()
+
+    def __copy__(self) -> "QualibrationGraph[NodeTypeVar]":
+        """
+        Creates a shallow copy of the QualibrationGraph.
+
+        This method ensures that the copied graph maintains all essential
+        attributes, including nodes, connectivity, and parameters, while
+        ensuring mutable objects like `_nodes` and `_graph` are copied
+        appropriately.
+
+        Returns:
+            QualibrationGraph: A new QualibrationGraph instance with copied
+                attributes.
+        """
+        # Create a new instance without calling __init__ directly
+        cls = self.__class__
+        new_graph = cls.__new__(cls)
+
+        # Copy primitive attributes and immutable ones
+        new_graph.name = self.name
+        new_graph.parameters_class = self.parameters_class
+        new_graph.description = self.description
+        new_graph.filepath = self.filepath
+        new_graph.modes = self.modes.model_copy()
+        new_graph.full_parameters_class = self.full_parameters_class
+        new_graph.full_parameters = self.full_parameters.model_copy(deep=True)
+        if hasattr(self, "run_start"):
+            new_graph.run_start = self.run_start
+
+        # Copy mutable attributes
+        new_graph._parameters = self.parameters.model_copy()
+        new_graph._nodes = {
+            name: node.copy(name) for name, node in self._nodes.items()
+        }
+        new_graph._connectivity = copy.deepcopy(self._connectivity)
+
+        # Copy graph structure
+        new_graph._graph = nx.DiGraph()
+        new_graph._graph.add_nodes_from(new_graph._nodes.values())
+        for v_name, x_name in self._connectivity:
+            if v_name in new_graph._nodes and x_name in new_graph._nodes:
+                new_graph._graph.add_edge(
+                    new_graph._nodes[v_name], new_graph._nodes[x_name]
+                )
+
+        # Copy orchestrator if it exists
+        new_graph._orchestrator = copy.copy(self._orchestrator)
+
+        # Copy targets
+        new_graph._initial_targets = copy.deepcopy(self._initial_targets)
+
+        # copy runnable items
+        new_graph._state_updates = copy.deepcopy(self._state_updates)
+        new_graph.outcomes = copy.deepcopy(self.outcomes)
+        new_graph.run_summary = (
+            self.run_summary.model_copy(deep=True) if self.run_summary else None
+        )
+
+        return new_graph
 
     def _add_nodes_and_connections(self) -> None:
         """
@@ -165,8 +228,7 @@ class QualibrationGraph(
         new_nodes = {}
         for name, node in nodes.items():
             if name != node.name:
-                node = cast(NodeTypeVar, node.copy(name))
-                # node = node.copy(name)
+                node = node.copy(name)
                 logger.warning(
                     f"{node} has to be copied due to conflicting name ({name})"
                 )
@@ -175,7 +237,9 @@ class QualibrationGraph(
 
     # TODO: logic commonly same with node so need to move to
     @classmethod
-    def scan_folder_for_instances(cls, path: Path) -> dict[str, QGraphBaseType]:
+    def scan_folder_for_instances(
+        cls, path: Path
+    ) -> RunnableCollection[str, QGraphBaseType]:
         """
         Scans a folder for graph instances and returns them.
 
@@ -211,7 +275,7 @@ class QualibrationGraph(
                     )
         finally:
             run_modes_ctx.reset(run_modes_token)
-        return graphs
+        return RunnableCollection(graphs)
 
     @classmethod
     def scan_graph_file(
@@ -369,7 +433,7 @@ class QualibrationGraph(
         orchestrator = self._orchestrator_or_error()
         self.cleanup()
         nodes = self._get_all_nodes_parameters(
-            passed_parameters.get("nodes", {})
+            passed_parameters.pop("nodes", {})
         )
         self._parameters = self.parameters.model_validate(passed_parameters)
         self.full_parameters = self.full_parameters_class.model_validate(
@@ -382,7 +446,20 @@ class QualibrationGraph(
         for node_name in nodes_parameters_model.model_fields_set:
             node_parameters_model = getattr(nodes_parameters_model, node_name)
             if node_parameters_model.targets_name is not None:
-                node_parameters_model.targets = targets
+                try:
+                    node_parameters_model.targets = targets
+                except TargetsFieldNotExist as ex:
+                    targets_name = node_parameters_model.targets_name
+                    msg = (
+                        f'Unable to run node "{node_name}" within graph '
+                        f'"{self.name}". The node is unable to locate the '
+                        "targets parameter "
+                        f'"{targets_name}". Please either add '
+                        f"node.parameters.{targets_name}, or alternatively set "
+                        f"a different targets parameter using "
+                        f'node.parameters.targets_name = "targets_name"'
+                    )
+                    raise TargetsFieldNotExist(msg) from ex
         orchestrator.traverse_graph(self, targets)
 
     def _post_run(
@@ -411,7 +488,7 @@ class QualibrationGraph(
             name=self.name,
             description=self.description,
             created_at=created_at,
-            completed_at=datetime.now(),
+            completed_at=datetime.now().astimezone(),
             parameters=self.full_parameters,
             outcomes=self.outcomes,
             initial_targets=self._initial_targets,
@@ -431,9 +508,7 @@ class QualibrationGraph(
         logger.debug(f"Graph run summary {self.run_summary}")
         return self.run_summary
 
-    def run(
-        self, **passed_parameters: Any
-    ) -> tuple["QualibrationGraph[NodeTypeVar]", BaseRunSummary]:
+    def run(self, **passed_parameters: Any) -> BaseRunSummary:
         """
         Runs the graph using the given parameters.
 
@@ -454,7 +529,7 @@ class QualibrationGraph(
         logger.info(
             f"Run graph {self.name} with parameters: {passed_parameters}"
         )
-        created_at = datetime.now()
+        self.run_start = datetime.now().astimezone()
         run_error: Optional[RunError] = None
         try:
             self._run(**passed_parameters)
@@ -466,8 +541,8 @@ class QualibrationGraph(
             )
             raise
         finally:
-            run_summary = self._post_run(created_at, run_error)
-        return self, run_summary
+            run_summary = self._post_run(self.run_start, run_error)
+        return run_summary
 
     def _get_qnode_or_error(self, node_name: str) -> NodeTypeVar:
         """
@@ -485,7 +560,6 @@ class QualibrationGraph(
         Raises:
             ValueError: If no node with the specified name exists.
         """
-        # node = cast(NodeType, self._nodes.get(node_name))
         node = self._nodes.get(node_name)
         if node is None:
             raise ValueError(f"Unknown node with name {node_name}", node_name)

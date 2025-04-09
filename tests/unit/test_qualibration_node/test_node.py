@@ -5,12 +5,13 @@ from unittest.mock import MagicMock, PropertyMock
 import pytest
 from pydantic import Field
 
-from qualibrate import QualibrationNode
+from qualibrate import NodeParameters, QualibrationNode
 from qualibrate.models.outcome import Outcome
 from qualibrate.models.run_mode import RunModes
 from qualibrate.models.run_summary.run_error import RunError
 from qualibrate.q_runnnable import QRunnable
 from qualibrate.qualibration_node import NodeCreateParametersType
+from qualibrate.storage.local_storage_manager import LocalStorageManager
 from qualibrate.utils.exceptions import StopInspection
 
 
@@ -18,18 +19,6 @@ class TestQualibrationNode:
     @pytest.fixture
     def mock_logger(self, mocker):
         return mocker.patch("qualibrate.qualibration_node.logger")
-
-    @pytest.fixture
-    def mock_last_executed_node_ctx(self, mocker):
-        return mocker.patch(
-            "qualibrate.qualibration_node.last_executed_node_ctx"
-        )
-
-    @pytest.fixture
-    def mock_external_parameters_ctx(self, mocker):
-        return mocker.patch(
-            "qualibrate.qualibration_node.external_parameters_ctx"
-        )
 
     @pytest.fixture
     def mock_run_modes_ctx(self, mocker):
@@ -43,8 +32,7 @@ class TestQualibrationNode:
         self,
         mocker,
         mock_logger,
-        mock_last_executed_node_ctx,
-        mock_external_parameters_ctx,
+        qualibrate_config_and_path_mocked,
     ):
         # Mock the _validate_passed_parameters_options method
         mock_validate = mocker.patch.object(
@@ -65,9 +53,6 @@ class TestQualibrationNode:
             return_value=None,
         )
 
-        # Mock external_parameters_ctx.get()
-        mock_external_parameters_ctx.get.return_value = None
-
         # Create an instance
         node = QualibrationNode(name="test_node")
 
@@ -78,13 +63,11 @@ class TestQualibrationNode:
         assert node.results == {}
         assert node.machine is None
         mock_warn_if_external.assert_called_once()
-        mock_last_executed_node_ctx.set.assert_called_with(node)
 
     def test_init_with_inspection_mode(
         self,
         mocker,
         mock_logger,
-        mock_external_parameters_ctx,
         mock_matplotlib,
     ):
         # Mock the _validate_passed_parameters_options method
@@ -102,9 +85,6 @@ class TestQualibrationNode:
             return_value=None,
         )
 
-        # Mock external_parameters_ctx.get()
-        mock_external_parameters_ctx.get.return_value = None
-
         # Create an instance with inspection mode
         modes = RunModes(inspection=True)
         with pytest.raises(
@@ -118,8 +98,18 @@ class TestQualibrationNode:
         mock_validate.assert_called_with("test_node", None, None)
         mock_warn_if_external.assert_not_called()
 
-    def test__validate_passed_parameters_options_with_parameters(self):
+    def test__validate_passed_parameters_options_with_invalid_parameters_type(
+        self,
+    ):
         parameters = MagicMock()
+        # Call the method
+        with pytest.raises(ValueError):
+            QualibrationNode._validate_passed_parameters_options(
+                name="test_node", parameters=parameters, parameters_class=None
+            )
+
+    def test__validate_passed_parameters_options_with_parameters(self):
+        parameters = MagicMock(spec=NodeParameters)
         # Call the method
         result = QualibrationNode._validate_passed_parameters_options(
             name="test_node", parameters=parameters, parameters_class=None
@@ -127,17 +117,31 @@ class TestQualibrationNode:
         # Should return the passed parameters
         assert result == parameters
 
+    def test__validate_passed_parameters_options_with_invalid_parameters_class(
+        self, mock_logger
+    ):
+        class Parameters:
+            pass
+
+        with pytest.raises(ValueError):
+            QualibrationNode._validate_passed_parameters_options(
+                name="test_node", parameters=None, parameters_class=Parameters
+            )
+
     def test__validate_passed_parameters_options_with_parameters_class(
         self, mock_logger
     ):
-        parameters_class = MagicMock(return_value="parameters_instance")
+        class Parameters(NodeParameters):
+            val: int = 1
+
         # Call the method
         result = QualibrationNode._validate_passed_parameters_options(
-            name="test_node", parameters=None, parameters_class=parameters_class
+            name="test_node", parameters=None, parameters_class=Parameters
         )
         # Should return instance of parameters_class
-        parameters_class.assert_called_once()
-        assert result == "parameters_instance"
+
+        assert isinstance(result, Parameters)
+        assert result.val == 1
         mock_logger.warning.assert_called_once_with(
             "parameters_class argument is deprecated. Please use "
             "parameters argument for initializing node 'test_node'."
@@ -146,7 +150,7 @@ class TestQualibrationNode:
     def test__validate_passed_parameters_options_with_both_parameters_and_class(
         self, mock_logger
     ):
-        parameters = MagicMock()
+        parameters = MagicMock(spec=NodeParameters)
         parameters_class = MagicMock()
 
         # Call the method
@@ -181,20 +185,26 @@ class TestQualibrationNode:
     def test__validate_passed_parameters_options_parameters_class_instantiation_failure(  # noqa: E501
         self, mock_logger
     ):
-        parameters_class = MagicMock(
-            side_effect=ValueError("Instantiation failed")
-        )
+        class Parameters(NodeParameters):
+            val_int: int = Field(default="a", validate_default=True)
 
-        with pytest.raises(ValueError, match="Instantiation failed"):
+        node_name = "test_node"
+        with pytest.raises(
+            ValueError,
+            match=f"Can't instantiate parameters class of node '{node_name}'",
+        ):
             QualibrationNode._validate_passed_parameters_options(
-                name="test_node",
+                name=node_name,
                 parameters=None,
-                parameters_class=parameters_class,
+                parameters_class=Parameters,
             )
         mock_logger.warning.assert_called_once()
 
     def test__warn_if_external_and_interactive_mpl(
-        self, mock_logger, mock_matplotlib
+        self,
+        mock_logger,
+        mock_matplotlib,
+        qualibrate_config_and_path_mocked,
     ):
         mock_matplotlib.get_backend.return_value = "tkagg"
         node = QualibrationNode(name="test_node")
@@ -208,7 +218,10 @@ class TestQualibrationNode:
         )
 
     def test__warn_if_external_and_interactive_mpl_non_interactive(
-        self, mock_logger, mock_matplotlib
+        self,
+        mock_logger,
+        mock_matplotlib,
+        qualibrate_config_and_path_mocked,
     ):
         mock_matplotlib.get_backend.return_value = "agg"
         node = QualibrationNode(name="test_node")
@@ -219,23 +232,36 @@ class TestQualibrationNode:
         mock_matplotlib.use.assert_not_called()
         mock_logger.warning.assert_not_called()
 
-    def test_snapshot_idx_with_storage_manager(self):
+    def test_snapshot_idx_with_storage_manager(
+        self,
+        qualibrate_config_and_path_mocked,
+    ):
         node = QualibrationNode(name="test_node")
         node.storage_manager = MagicMock(snapshot_idx=42)
         assert node.snapshot_idx == 42
 
-    def test_snapshot_idx_without_storage_manager(self):
+    def test_snapshot_idx_without_storage_manager(
+        self,
+        qualibrate_config_and_path_mocked,
+    ):
         node = QualibrationNode(name="test_node")
         node.storage_manager = None
         assert node.snapshot_idx is None
 
-    def test_save_with_storage_manager(self):
+    def test_save_with_storage_manager(
+        self, mocker, qualibrate_config_and_path_mocked
+    ):
         node = QualibrationNode(name="test_node")
-        node.storage_manager = MagicMock()
+        manager = MagicMock(spec=LocalStorageManager)
+        mocker.patch.object(node, "_get_storage_manager", return_value=manager)
         node.save()
-        node.storage_manager.save.assert_called_with(node=node)
+        manager.save.assert_called_with(node=node)
 
-    def test__post_run(self, mocker):
+    def test__post_run(
+        self,
+        mocker,
+        qualibrate_config_and_path_mocked,
+    ):
         class P(NodeCreateParametersType):
             qubits: list[str] = Field(
                 default_factory=lambda: ["target1", "target2", "target3"]
@@ -243,7 +269,7 @@ class TestQualibrationNode:
 
         node = QualibrationNode(name="test_node")
         last_executed_node = MagicMock()
-        created_at = datetime.now()
+        created_at = datetime.now().astimezone()
         initial_targets = ["target1", "target2"]
         run_error = None
         parameters = P()
@@ -252,10 +278,9 @@ class TestQualibrationNode:
         mocker.patch.object(
             node.__class__, "parameters", PropertyMock(return_value=parameters)
         )
+        node.run_start = created_at
 
         run_summary = node._post_run(
-            last_executed_node,
-            created_at,
             initial_targets,
             parameters,
             run_error,
@@ -278,8 +303,7 @@ class TestQualibrationNode:
         self,
         mocker,
         mock_run_modes_ctx,
-        mock_external_parameters_ctx,
-        mock_last_executed_node_ctx,
+        qualibrate_config_and_path_mocked,
     ):
         class P(NodeCreateParametersType):
             qubits: list[str] = Field(
@@ -304,20 +328,18 @@ class TestQualibrationNode:
             node, "_post_run", return_value="run_summary"
         )
 
-        # Mock get
-        last_executed_node = MagicMock()
-        mock_last_executed_node_ctx.get.return_value = last_executed_node
-
         # Call run
-        result_node, run_summary = node.run()
+        run_summary = node.run()
 
         # Assertions
         mock_run_node_file.assert_called_with(node.filepath)
         mock_post_run.assert_called()
-        assert result_node == last_executed_node
         assert run_summary == "run_summary"
 
-    def test_run_no_filepath(self, mocker):
+    def test_run_no_filepath(
+        self,
+        qualibrate_config_and_path_mocked,
+    ):
         node = QualibrationNode(name="test_node")
         node.filepath = None
 
@@ -331,8 +353,7 @@ class TestQualibrationNode:
         mocker,
         mock_logger,
         mock_run_modes_ctx,
-        mock_external_parameters_ctx,
-        mock_last_executed_node_ctx,
+        qualibrate_config_and_path_mocked,
     ):
         class P(NodeCreateParametersType):
             qubits: list[str] = Field(
@@ -365,11 +386,16 @@ class TestQualibrationNode:
 
         # Assertions
         mock_post_run.assert_called()
-        run_error = mock_post_run.call_args[0][4]
+        run_error = mock_post_run.call_args[0][2]
         assert isinstance(run_error, RunError)
         mock_logger.exception.assert_called()
 
-    def test_run_node_file(self, mocker, mock_matplotlib):
+    def test_run_node_file(
+        self,
+        mocker,
+        mock_matplotlib,
+        qualibrate_config_and_path_mocked,
+    ):
         node = QualibrationNode(name="test_node")
         node_filepath = Path("test_node.py")
         mock_import_from_path = mocker.patch(
@@ -385,8 +411,23 @@ class TestQualibrationNode:
             "_node_test_node", node_filepath
         )
 
-    def test_stop_no_qm(self, mocker):
+    @pytest.fixture
+    def node_active_node_self(self, mocker):
+        mocker.patch(
+            "qualibrate.qualibration_node.QualibrationNode._get_storage_manager"
+        )
         node = QualibrationNode(name="test_node")
+        node.__class__.active_node = node
+        yield node
+        node.__class__.active_node = None
+
+    def test_stop_no_qm(
+        self,
+        mocker,
+        node_active_node_self,
+        qualibrate_config_and_path_mocked,
+    ):
+        node = node_active_node_self
         node.machine = None
 
         # Mock find_spec to return None
@@ -398,8 +439,13 @@ class TestQualibrationNode:
 
         assert result is False
 
-    def test_stop_with_qm(self, mocker):
-        node = QualibrationNode(name="test_node")
+    def test_stop_with_qm(
+        self,
+        mocker,
+        node_active_node_self,
+        qualibrate_config_and_path_mocked,
+    ):
+        node = node_active_node_self
         node.machine = MagicMock()
         node.machine.connect.return_value = MagicMock(
             list_open_quantum_machines=lambda: [1],

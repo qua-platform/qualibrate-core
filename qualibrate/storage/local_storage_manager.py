@@ -1,18 +1,20 @@
 import json
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Generic, Optional, TypeVar
 
 from qualang_tools.results import DataHandler
 
+from qualibrate.models.outcome import Outcome
 from qualibrate.storage.storage_manager import StorageManager
 from qualibrate.utils.logger_m import logger
 
 if TYPE_CHECKING:
-    from qualibrate.parameters import NodeParameters
+    from typing import Any
+
     from qualibrate.qualibration_node import QualibrationNode
 
-
-NodeTypeVar = TypeVar("NodeTypeVar", bound="QualibrationNode[NodeParameters]")
+NodeTypeVar = TypeVar("NodeTypeVar", bound="QualibrationNode[Any, Any]")
 
 
 class LocalStorageManager(StorageManager[NodeTypeVar], Generic[NodeTypeVar]):
@@ -39,6 +41,10 @@ class LocalStorageManager(StorageManager[NodeTypeVar], Generic[NodeTypeVar]):
         self.data_handler = DataHandler(root_data_folder=root_data_folder)
         self.active_machine_path = active_machine_path
         self.snapshot_idx = None
+
+    def _clean_data_handler(self) -> None:
+        self.data_handler.path = None
+        self.data_handler.path_properties = None
 
     def save(self, node: NodeTypeVar) -> None:
         """
@@ -67,15 +73,30 @@ class LocalStorageManager(StorageManager[NodeTypeVar], Generic[NodeTypeVar]):
 
         # Save results
         self.data_handler.name = node.name
-        DataHandler.node_data = {
+        self._clean_data_handler()
+        outcomes = {
+            k: v.value if isinstance(v, Outcome) else v
+            for k, v in node.outcomes.items()
+        }
+        self.data_handler.node_data = {
             "quam": "./quam_state.json",
             "parameters": {
                 "model": node.parameters.model_dump(mode="json"),
                 "schema": node.parameters.__class__.model_json_schema(),
             },
+            "outcomes": outcomes,
         }
-        node_contents = (
-            self.data_handler.generate_node_contents()
+        node_contents = self.data_handler.generate_node_contents(
+            metadata={
+                "description": node.description,
+                "run_start": node.run_start.isoformat(timespec="milliseconds"),
+                "run_end": (
+                    datetime.now()
+                    .astimezone()
+                    .astimezone()
+                    .isoformat(timespec="milliseconds")
+                ),
+            }
         )  # TODO directly access idx
         self.data_handler.save_data(
             data=node.results,
@@ -126,3 +147,11 @@ class LocalStorageManager(StorageManager[NodeTypeVar], Generic[NodeTypeVar]):
                 path=self.active_machine_path,
                 content_mapping=content_mapping,
             )
+
+    def get_snapshot_idx(self, node: NodeTypeVar, update: bool = False) -> int:
+        if self.snapshot_idx is not None and not update:
+            return self.snapshot_idx
+        self.snapshot_idx = self.data_handler.generate_node_contents()["id"]
+        if self.snapshot_idx is None:
+            raise RuntimeError("Snapshot idx wasn't generated")
+        return self.snapshot_idx

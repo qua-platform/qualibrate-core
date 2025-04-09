@@ -2,11 +2,12 @@ from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Generic, Optional, TypeVar
 
 if TYPE_CHECKING:
-    from qualibrate.parameters import NodeParameters
+    from typing import Any
+
     from qualibrate.qualibration_node import QualibrationNode
 
 
-NodeTypeVar = TypeVar("NodeTypeVar", bound="QualibrationNode[NodeParameters]")
+NodeTypeVar = TypeVar("NodeTypeVar", bound="QualibrationNode[Any, Any]")
 
 
 class StorageManager(ABC, Generic[NodeTypeVar]):
@@ -32,4 +33,8 @@ class StorageManager(ABC, Generic[NodeTypeVar]):
         Args:
             node (QualibrationNode): The node whose state is to be saved.
         """
+        pass
+
+    @abstractmethod
+    def get_snapshot_idx(self, node: NodeTypeVar, update: bool = False) -> int:
         pass

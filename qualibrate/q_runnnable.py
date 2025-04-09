@@ -29,7 +29,7 @@ def file_is_calibration_instance(file: Path, klass: str) -> bool:
         return False
 
     contents = file.read_text()
-    return f"{klass}(" in contents
+    return f"{klass}(" in contents or f"{klass}[" in contents
 
 
 run_modes_ctx: ContextVar[Optional[RunModes]] = ContextVar(
@@ -60,7 +60,7 @@ class QRunnable(ABC, Generic[CreateParametersType, RunParametersType]):
     ):
         self.name = name
         self.parameters_class = self.build_parameters_class_from_instance(
-            parameters
+            parameters, True
         )
         self._parameters = self.parameters_class()
         self.description = description
@@ -85,12 +85,15 @@ class QRunnable(ABC, Generic[CreateParametersType, RunParametersType]):
     @staticmethod
     def build_parameters_class_from_instance(
         parameters: CreateParametersType,
+        use_passed_as_base: bool = False,
     ) -> type[CreateParametersType]:
         """
         Builds a parameter class from a given instance.
 
         Args:
             parameters (CreateParametersType): The parameters instance.
+            use_passed_as_base (bool): inherit parameters class if True
+                otherwise use its bases
 
         Returns:
             A new parameter class type.
@@ -98,13 +101,14 @@ class QRunnable(ABC, Generic[CreateParametersType, RunParametersType]):
         fields = {
             name: copy(field) for name, field in parameters.model_fields.items()
         }
-        # TODO: additional research about more correct field copying way
         for param_name, param_value in parameters.model_dump().items():
             fields[param_name].default = param_value
+        klass = parameters.__class__
+        base = (klass,) if use_passed_as_base else klass.__bases__
         model = create_model(  # type: ignore
             parameters.__class__.__name__,
             __doc__=parameters.__class__.__doc__,
-            __base__=parameters.__class__.__bases__,
+            __base__=base,
             __module__=parameters.__class__.__module__,
             **{name: (info.annotation, info) for name, info in fields.items()},
         )
@@ -195,12 +199,7 @@ class QRunnable(ABC, Generic[CreateParametersType, RunParametersType]):
         pass
 
     @abstractmethod
-    def run(
-        self, **passed_parameters: Any
-    ) -> tuple[
-        "QRunnable[CreateParametersType, RunParametersType]",
-        BaseRunSummary,
-    ]:
+    def run(self, **passed_parameters: Any) -> BaseRunSummary:
         """
         Runs the runnable with the provided parameters.
 

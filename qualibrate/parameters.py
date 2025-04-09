@@ -7,8 +7,9 @@ from typing import (
     cast,
 )
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from qualibrate.utils.exceptions import TargetsFieldNotExist
 from qualibrate.utils.logger_m import logger
 from qualibrate.utils.naming import get_full_class_path
 from qualibrate.utils.parameters import recursive_properties_solver
@@ -31,6 +32,11 @@ __all__ = [
 
 
 class RunnableParameters(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+        use_attribute_docstrings=True,
+    )
+
     @classmethod
     def serialize(cls, **kwargs: Any) -> Mapping[str, Any]:
         schema = cls.model_json_schema()
@@ -87,7 +93,7 @@ class TargetParameter(BaseModel):
         if self.targets_name is None:
             return
         if self.targets_name not in self.model_fields:
-            raise ValueError(
+            raise TargetsFieldNotExist(
                 f"Targets name ({self.targets_name}) specified but field does "
                 "not exist"
             )
@@ -133,8 +139,6 @@ class NodesParameters(RunnableParameters):
 
 class GraphParameters(RunnableParameters, TargetParameter):
     targets_name: ClassVar[Optional[str]] = "qubits"
-
-    qubits: list[TargetType] = Field(default_factory=list)
 
     @classmethod
     def serialize(
