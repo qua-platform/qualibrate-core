@@ -425,6 +425,8 @@ class QualibrationNode(
             return None
         node_content = read_node_content(node_dir, node_id, base_path)
         if node_content is not None:
+            if self.storage_manager:
+                self.storage_manager.snapshot_idx = node_id
             quam_machine, parameters = parse_node_content(
                 node_content,
                 node_id,
