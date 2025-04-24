@@ -34,7 +34,10 @@ from qualibrate_config.resolvers import (
     get_qualibrate_config_path,
 )
 
-from qualibrate.config.resolvers import get_quam_state_path
+from qualibrate.config.resolvers import (
+    get_default_project_path,
+    get_quam_state_path,
+)
 from qualibrate.models.outcome import Outcome
 from qualibrate.models.run_mode import RunModes
 from qualibrate.models.run_summary.base import BaseRunSummary
@@ -67,7 +70,9 @@ from qualibrate.utils.node.content import (
 )
 from qualibrate.utils.node.loaders.base_loader import BaseLoader
 from qualibrate.utils.node.path_solver import (
+    get_latest_node_dir_by_name_part,
     get_node_dir_path,
+    get_node_id_name_time,
 )
 from qualibrate.utils.node.record_state_update import (
     record_state_update_getattr,
@@ -414,9 +419,7 @@ class QualibrationNode(
             or None if loading fails.
         """
         if base_path is None:
-            q_config_path = get_qualibrate_config_path()
-            qs = get_qualibrate_config(q_config_path)
-            base_path = qs.storage.location
+            base_path = get_default_project_path()
         node_dir = get_node_dir_path(node_id, base_path)
         if node_dir is None:
             logger.error(
@@ -488,6 +491,28 @@ class QualibrationNode(
             base_path=base_path,
             custom_loaders=custom_loaders,
             build_params_class=isinstance(caller, type),
+        )
+
+    @classmethod
+    def load_from_name(
+        cls,
+        name: str,
+        base_path: Optional[Path] = None,
+        custom_loaders: Optional[Sequence[type[BaseLoader]]] = None,
+    ) -> Optional["QualibrationNode[ParametersType, MachineType]"]:
+        if base_path is None:
+            base_path = get_default_project_path()
+        node_path = get_latest_node_dir_by_name_part(name, base_path)
+        if node_path is None:
+            return None
+        node_id, _, _ = get_node_id_name_time(node_path)
+        return cast(
+            Optional["QualibrationNode[ParametersType, MachineType]"],
+            cls.load_from_id(
+                node_id=node_id,
+                base_path=base_path,
+                custom_loaders=custom_loaders,
+            ),
         )
 
     def _post_run(
