@@ -53,7 +53,7 @@ from qualibrate.runnables.run_action.action_manager import (
 )
 from qualibrate.storage import StorageManager
 from qualibrate.storage.local_storage_manager import LocalStorageManager
-from qualibrate.utils.exceptions import StopInspection
+from qualibrate.utils.exceptions import StopInspection, skip_exception_frames
 from qualibrate.utils.logger_m import (
     ALLOWED_LOG_LEVEL_NAMES,
     LOG_LEVEL_NAMES_TYPE,
@@ -613,13 +613,21 @@ class QualibrationNode(
 
             self.run_node_file(self.filepath)
         except Exception as ex:
+            # We skip some traceback items related to the node run from file
+            # related to QualibrationNode.run_node_file method.
+            ex = skip_exception_frames(
+                ex,
+                "run_node_file",
+                "qualibration_node.py",
+                count=4,
+            )
             run_error = RunError(
                 error_class=ex.__class__.__name__,
                 message=str(ex),
                 traceback=traceback.format_tb(ex.__traceback__),
             )
             logger.exception(f"Failed to run node {self.name}", exc_info=ex)
-            raise
+            raise ex
         else:
             self._fraction_complete = 1.0
         finally:
