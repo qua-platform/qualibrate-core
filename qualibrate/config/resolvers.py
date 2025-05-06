@@ -3,6 +3,10 @@ from pathlib import Path
 from typing import Optional
 
 from qualibrate_config.models import QualibrateConfig
+from qualibrate_config.resolvers import (
+    get_qualibrate_config,
+    get_qualibrate_config_path,
+)
 
 
 def get_quam_state_path(config: QualibrateConfig) -> Optional[Path]:
@@ -26,3 +30,13 @@ def get_quam_state_path(config: QualibrateConfig) -> Optional[Path]:
         stacklevel=2,
     )
     return Path(am_path)
+
+
+def get_qualibrate_config_from_default() -> QualibrateConfig:
+    q_config_path = get_qualibrate_config_path()
+    return get_qualibrate_config(q_config_path)
+
+
+def get_default_project_path() -> Path:
+    qs = get_qualibrate_config_from_default()
+    return qs.storage.location

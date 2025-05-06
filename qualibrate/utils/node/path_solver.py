@@ -1,9 +1,33 @@
 from collections.abc import Mapping
+from datetime import datetime, time
 from os import PathLike
 from pathlib import Path
 from typing import Any, Optional
 
 from qualibrate.utils.logger_m import logger
+
+
+def get_node_id_name_time(
+    node_path: Path,
+) -> tuple[Optional[int], str, Optional[time]]:
+    parts = node_path.stem.split("_")
+    if len(parts) < 3:
+        return None, node_path.stem, None
+    id_str, *node_name, node_time_str = parts
+    node_id = (
+        int(id_str[1:])
+        if id_str.startswith("#") and id_str[1:].isnumeric()
+        else None
+    )
+    if node_id is None:
+        return None, node_path.stem, None
+    node_name_str = "_".join(node_name)
+
+    try:
+        node_time = datetime.strptime(node_time_str, "%H%M%S").time()
+    except ValueError:
+        node_time = None
+    return node_id, node_name_str, node_time
 
 
 def get_node_dir_path(id: int, base_path: Path) -> Optional[Path]:
@@ -19,6 +43,15 @@ def get_node_dir_path(id: int, base_path: Path) -> Optional[Path]:
     """
     node_path = next(base_path.glob(f"*/#{id}_*"), None)
     return Path(node_path) if node_path is not None else None
+
+
+def get_latest_node_dir_by_name_part(
+    name_part: str, base_path: Path
+) -> Optional[Path]:
+    nodes: list[Path] = list(
+        sorted(base_path.glob(f"*/#*_*{name_part}*_*"), reverse=True)
+    )
+    return nodes[0] if nodes else None
 
 
 def get_node_filepath(node_path: Path) -> Path:
