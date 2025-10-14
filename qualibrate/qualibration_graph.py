@@ -34,6 +34,7 @@ from qualibrate.q_runnnable import (
 from qualibrate.qualibration_node import QualibrationNode
 from qualibrate.runnables.runnable_collection import RunnableCollection
 from qualibrate.utils.exceptions import StopInspection, TargetsFieldNotExist
+from qualibrate.utils.inspection_cache import enable_inspection_caching
 from qualibrate.utils.logger_m import logger
 from qualibrate.utils.read_files import get_module_name, import_from_path
 from qualibrate.utils.type_protocols import TargetType
@@ -262,16 +263,18 @@ class QualibrationGraph(
                 )
             run_modes_token = run_modes_ctx.set(RunModes(inspection=True))
 
-            for file in sorted(path.iterdir()):
-                if not file_is_calibration_instance(file, cls.__name__):
-                    continue
-                try:
-                    cls.scan_graph_file(file, graphs)
-                except Exception as e:
-                    logger.exception(
-                        f"An error occurred on scanning graph file {file.name}",
-                        exc_info=e,
-                    )
+            # Enable inspection caching for improved performance
+            with enable_inspection_caching():
+                for file in sorted(path.iterdir()):
+                    if not file_is_calibration_instance(file, cls.__name__):
+                        continue
+                    try:
+                        cls.scan_graph_file(file, graphs)
+                    except Exception as e:
+                        logger.exception(
+                            f"An error occurred on scanning graph file {file.name}",
+                            exc_info=e,
+                        )
         finally:
             run_modes_ctx.reset(run_modes_token)
         return RunnableCollection(graphs)
