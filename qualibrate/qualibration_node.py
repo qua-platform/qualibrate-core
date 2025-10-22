@@ -633,6 +633,7 @@ class QualibrationNode(
             self.modes = new_run_modes
             self.__class__.active_node = self
             self._action_manager.skip_actions = skip_actions
+            self._get_storage_manager().get_snapshot_idx(self, update=True)
 
             self.run_node_file(self.filepath)
         except Exception as ex:
