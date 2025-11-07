@@ -53,6 +53,7 @@ from qualibrate.runnables.runnable_collection import RunnableCollection
 from qualibrate.storage import StorageManager
 from qualibrate.storage.local_storage_manager import LocalStorageManager
 from qualibrate.utils.exceptions import StopInspection
+from qualibrate.utils.inspection_cache import enable_inspection_caching
 from qualibrate.utils.logger_m import (
     ALLOWED_LOG_LEVEL_NAMES,
     LOG_LEVEL_NAMES_TYPE,
@@ -777,16 +778,18 @@ class QualibrationNode(
             )
         run_modes_token = run_modes_ctx.set(RunModes(inspection=True))
         try:
-            for file in sorted(path.iterdir()):
-                if not file_is_calibration_instance(file, cls.__name__):
-                    continue
-                try:
-                    cls.scan_node_file(file, nodes)
-                except Exception as e:
-                    logger.warning(
-                        "An error occurred on scanning node file "
-                        f"{file.name}.\nError: {type(e)}: {e}"
-                    )
+            # Enable inspection caching for improved performance
+            with enable_inspection_caching():
+                for file in sorted(path.iterdir()):
+                    if not file_is_calibration_instance(file, cls.__name__):
+                        continue
+                    try:
+                        cls.scan_node_file(file, nodes)
+                    except Exception as e:
+                        logger.warning(
+                            "An error occurred on scanning node file "
+                            f"{file.name}.\nError: {type(e)}: {e}"
+                        )
 
         finally:
             run_modes_ctx.reset(run_modes_token)
