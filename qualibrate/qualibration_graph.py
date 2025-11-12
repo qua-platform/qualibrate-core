@@ -751,7 +751,9 @@ class QualibrationGraph(
         return execution_parameters_class
 
     @ensure_finalized
-    def serialize(self, /, **kwargs: Any) -> Mapping[str, Any]:
+    def serialize(
+        self, /, cytoscape: bool = False, reactflow: bool = False, **kwargs: Any
+    ) -> Mapping[str, Any]:
         """
         Serializes the graph into a dictionary format.
 
@@ -759,16 +761,16 @@ class QualibrationGraph(
         including nodes, parameters, connectivity, orchestrator.
 
         Args:
+            cytoscape (bool): Is it needed to include cytoscape graph
+                representation. Defaults to `False`.
+            reactflow (bool): Is it needed to include reactflow graph
+                representation. Defaults to `False`.
             **kwargs (Any): Additional arguments for serialization.
 
-        Keyword Args:
-            cytoscape (bool): Is it needed to include cytoscape information.
-                Defaults to `False`.
         Returns:
             Mapping[str, Any]: Serialized representation of the graph.
         """
         data = dict(super().serialize())
-        cytoscape = bool(kwargs.get("cytoscape", False))
         parameters = self.full_parameters_class.serialize(**kwargs)
         nx_data: dict[str, Any] = dict(
             self.__class__.nx_graph_export(self._graph, node_names_only=True)
@@ -801,6 +803,8 @@ class QualibrationGraph(
         data.update({"nodes": nodes, "connectivity": connectivity})
         if cytoscape:
             data["cytoscape"] = self.__class__.cytoscape_representation(data)
+        if reactflow:
+            data["reactflow"] = self.__class__.nx_to_react_flow(self._graph)
         return data
 
     @ensure_finalized

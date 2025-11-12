@@ -113,6 +113,7 @@ class GraphExportMixin(Generic[GraphElementTypeVar]):
                     adj["id"] = adj["id"].name
         return data
 
+    # TODO: remove (deprecated)
     @staticmethod
     def cytoscape_representation(
         serialized: Mapping[str, Any],
@@ -151,3 +152,37 @@ class GraphExportMixin(Generic[GraphElementTypeVar]):
             for source, dest in serialized["connectivity"]
         ]
         return [*nodes, *edges]
+
+    @staticmethod
+    def nx_to_react_flow(
+        graph: "nx.DiGraph[GraphElementTypeVar]",
+    ) -> Mapping[str, Any]:
+        """
+        Convert a NetworkX directed graph into a React Flow-compatible
+        structure.
+        """
+        # Compute layout. Can be:
+        # spring_layout, kamada_kawai_layout, shell_layout
+        pos = nx.spring_layout(graph, scale=500)
+
+        # Create React Flow nodes
+        nodes = [
+            {
+                "id": id(n),
+                "type": "default",
+                "data": {"label": n.name},
+                "position": {"x": float(xy[0]), "y": float(xy[1])},
+            }
+            for n, xy in pos.items()
+        ]
+        edges = [
+            {
+                "id": f"{src.name}_{dst.name}",
+                "source": id(src),
+                "target": id(dst),
+                "type": "smoothstep",
+            }
+            for src, dst in graph.edges
+        ]
+
+        return {"nodes": nodes, "edges": edges}
