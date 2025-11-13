@@ -1,3 +1,8 @@
+from collections import namedtuple
+from unittest.mock import ANY
+
+import networkx as nx
+
 from qualibrate.models.node_status import ElementRunStatus
 from qualibrate.parameters import (
     GraphParameters,
@@ -110,3 +115,45 @@ class TestGraphExportMixin:
                 },
             },
         ]
+
+    def test_nx_to_react_flow(self):
+        Named = namedtuple("Named", "name")
+        g = nx.DiGraph()
+        n1, n2 = Named("n1"), Named("n2")
+        g.add_node(n1)
+        g.add_node(n2)
+        g.add_edge(n1, n2)
+
+        exported = GraphExportMixin.nx_to_react_flow(g)
+        assert exported == {
+            "nodes": [
+                {
+                    "data": {"label": "n1"},
+                    "id": id(n1),
+                    "position": {
+                        "x": ANY,
+                        "y": ANY,
+                    },
+                    "type": "default",
+                },
+                {
+                    "data": {
+                        "label": "n2",
+                    },
+                    "id": id(n2),
+                    "position": {
+                        "x": ANY,
+                        "y": ANY,
+                    },
+                    "type": "default",
+                },
+            ],
+            "edges": [
+                {
+                    "id": "n1_n2",
+                    "source": id(n1),
+                    "target": id(n2),
+                    "type": "smoothstep",
+                }
+            ],
+        }
