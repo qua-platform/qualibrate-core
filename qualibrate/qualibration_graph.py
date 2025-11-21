@@ -37,7 +37,11 @@ from qualibrate.q_runnnable import (
 )
 from qualibrate.qualibration_node import QualibrationNode
 from qualibrate.runnables.runnable_collection import RunnableCollection
-from qualibrate.utils.exceptions import StopInspection, TargetsFieldNotExist
+from qualibrate.utils.exceptions import (
+    CyclicGraphError,
+    StopInspection,
+    TargetsFieldNotExist,
+)
 from qualibrate.utils.graph_building import (
     GraphElementTypeVar,
     GraphExportMixin,
@@ -255,6 +259,23 @@ class QualibrationGraph(
 
         return new_graph
 
+    def _validate_graph_acyclic(self) -> None:
+        """Check if directed nodes graph contains cycles.
+
+        Raises:
+            CyclicGraphError: There is a cycle in graph
+        """
+        try:
+            cycle = nx.find_cycle(self._graph, orientation="original")
+        except nx.NetworkXNoCycle:
+            return
+        node_names = tuple(
+            [cycle[0][0].name, *[edge[1].name for edge in cycle]]
+        )
+        raise CyclicGraphError(
+            f"Detected cycle in graph {self.name}: {node_names}",
+        )
+
     def __repr__(self) -> str:
         return (
             f"{self.__class__.__name__}: {self.name} "
@@ -303,6 +324,7 @@ class QualibrationGraph(
                     destination_element,
                     scenario=self._connectivity[(source, destination)],
                 )
+        self._validate_graph_acyclic()
 
     @staticmethod
     def _get_library() -> "QualibrationLibrary[NodeLibT, GraphElLibT]":
