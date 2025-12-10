@@ -1,5 +1,6 @@
 from collections.abc import Generator
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 import tomli_w
@@ -84,3 +85,77 @@ def machine():
         },
     )
     return machine
+
+
+@pytest.fixture
+def simple_action_function():
+    """Provide a simple function that can be wrapped as an action."""
+
+    def action_func(node):
+        """Simple action that returns a dict."""
+        return {"result": "success", "value": 42}
+
+    return action_func
+
+
+@pytest.fixture
+def action_with_no_return():
+    """Provide an action function that returns None."""
+
+    def action_func(node):
+        """Action with no return value."""
+        node.results = {"computed": True}
+        # No return statement
+
+    return action_func
+
+
+@pytest.fixture
+def action_with_non_dict_return():
+    """Provide an action function that returns a non-dict value."""
+
+    def action_func(node):
+        """Action that returns a non-dict value."""
+        return "just a string"
+
+    return action_func
+
+
+@pytest.fixture
+def action_that_raises():
+    """Provide an action function that raises an exception."""
+
+    def action_func(node):
+        """Action that raises an error."""
+        raise ValueError("Test error from action")
+
+    return action_func
+
+
+@pytest.fixture
+def non_interactive_mode(mocker):
+    """Mock is_interactive to return False (non-interactive mode)."""
+    mocker.patch(
+        "qualibrate.runnables.run_action.action.is_interactive",
+        return_value=False,
+    )
+    yield
+
+
+@pytest.fixture
+def mock_action_manager():
+    """Provide a mock ActionManager."""
+    manager = Mock()
+    manager.current_action = None
+    manager.predefined_names = set()
+    manager.actions = {}
+    return manager
+
+
+@pytest.fixture
+def mock_node():
+    """Provide a mock QualibrationNode."""
+    node = Mock()
+    node.namespace = {}
+    node.action_label = None
+    return node
