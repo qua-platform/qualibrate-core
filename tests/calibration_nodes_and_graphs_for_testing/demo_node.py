@@ -1,17 +1,25 @@
+from enum import Enum
+
 from pydantic import Field
 
 from qualibrate import NodeParameters, QualibrationNode
+
+
+class Color(Enum):
+    RED = "red"
+    GREEN = "green"
+    BLUE = "blue"
 
 
 class Parameters(NodeParameters):
     qubits: list[str] = Field(default_factory=list)
     str_value: str = "test"
     int_value: int = 1
-    float_value: float = 1.0
+    float_value: float = 1
+    random_color: Color = Color.BLUE
 
 
 node = QualibrationNode("test_node", parameters=Parameters())
-node.parameters = Parameters()
 
 
 @node.run_action()
