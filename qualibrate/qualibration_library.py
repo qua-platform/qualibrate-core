@@ -13,9 +13,17 @@ from qualibrate.parameters import (
     ExecutionParameters,
     NodeParameters,
 )
+from qualibrate.q_runnnable import (
+    clear_parameters_class_cache,
+)
 from qualibrate.qualibration_graph import GraphElementTypeVar, QualibrationGraph
 from qualibrate.qualibration_node import QualibrationNode
 from qualibrate.runnables.runnable_collection import RunnableCollection
+from qualibrate.utils.inspect_cache import (
+    clear_inspect_cache,
+    disable_inspect_cache,
+    enable_inspect_cache,
+)
 from qualibrate.utils.logger_m import logger
 from qualibrate.utils.type_protocols import MachineProtocol
 
@@ -80,14 +88,27 @@ class QualibrationLibrary(Generic[NodeTypeVar, GraphElementTypeVar]):
         if self._library_folder is None:
             logger.warning("Can't rescan library without specified folder.")
             return
-        self.nodes = cast(
-            RunnableCollection[str, NodeTypeVar],
-            QualibrationNode.scan_folder_for_instances(self._library_folder),
-        )
-        self.graphs = cast(
-            RunnableCollection[str, QualibrationGraph[GraphElementTypeVar]],
-            QualibrationGraph.scan_folder_for_instances(self._library_folder),
-        )
+
+        # Enable caching for improved performance during scanning
+        enable_inspect_cache()
+        try:
+            self.nodes = cast(
+                RunnableCollection[str, NodeTypeVar],
+                QualibrationNode.scan_folder_for_instances(
+                    self._library_folder
+                ),
+            )
+            self.graphs = cast(
+                RunnableCollection[str, QualibrationGraph[GraphElementTypeVar]],
+                QualibrationGraph.scan_folder_for_instances(
+                    self._library_folder
+                ),
+            )
+        finally:
+            # Disable caching and clear caches after scanning
+            disable_inspect_cache()
+            clear_inspect_cache()
+            clear_parameters_class_cache()
 
     def rescan(self) -> None:
         """

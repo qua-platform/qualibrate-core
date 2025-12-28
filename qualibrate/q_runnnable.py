@@ -25,6 +25,39 @@ CreateParametersType = TypeVar("CreateParametersType", bound=RunnableParameters)
 RunParametersType = TypeVar("RunParametersType", bound=RunnableParameters)
 
 
+# Cache for dynamically created parameter classes
+# Key: (original_class, defaults_hash, use_passed_as_base)
+# Value: created model class
+_parameters_class_cache: dict[tuple[type, int, bool], type] = {}
+_parameters_class_cache_enabled: bool = True
+
+
+def enable_parameters_class_cache() -> None:
+    """Enable caching for parameter class creation."""
+    global _parameters_class_cache_enabled
+    _parameters_class_cache_enabled = True
+
+
+def disable_parameters_class_cache() -> None:
+    """Disable caching for parameter class creation."""
+    global _parameters_class_cache_enabled
+    _parameters_class_cache_enabled = False
+
+
+def clear_parameters_class_cache() -> None:
+    """Clear the parameter class cache."""
+    _parameters_class_cache.clear()
+
+
+def get_parameters_class_cache_stats() -> dict[str, Any]:
+    """Get statistics about parameter class cache."""
+    return {
+        "enabled": _parameters_class_cache_enabled,
+        "size": len(_parameters_class_cache),
+        "classes_cached": list(_parameters_class_cache.keys()),
+    }
+
+
 def _read_calibration_file(file: Path) -> str:
     try:
         return file.read_text()
@@ -112,6 +145,7 @@ class QRunnable(ABC, Generic[CreateParametersType, RunParametersType]):
     def build_parameters_class_from_instance(
         parameters: CreateParametersType,
         use_passed_as_base: bool = False,
+        use_cache: bool = True,
     ) -> type[CreateParametersType]:
         """
         Builds a parameter class from a given instance.
@@ -120,29 +154,74 @@ class QRunnable(ABC, Generic[CreateParametersType, RunParametersType]):
             parameters (CreateParametersType): The parameters instance.
             use_passed_as_base (bool): inherit parameters class if True
                 otherwise use its bases
+            use_cache (bool): Whether to use caching for performance.
+                Defaults to True.
 
         Returns:
             A new parameter class type.
         """
-        fields = {
-            name: copy(field)
-            for name, field in parameters.__class__.model_fields.items()
-        }
-        for param_name, param_value in parameters.model_dump().items():
-            fields[param_name].default = param_value
         klass = parameters.__class__
+
+        # Try to use cache if enabled
+        if use_cache and _parameters_class_cache_enabled:
+            # Create a hashable key from the defaults
+            try:
+                defaults_dict = parameters.model_dump()
+                # Create hash from sorted items for consistency
+                defaults_hash = hash(
+                    tuple(
+                        sorted(
+                            (
+                                k,
+                                v if not isinstance(v, list | dict) else str(v),
+                            )
+                            for k, v in defaults_dict.items()
+                        )
+                    )
+                )
+                cache_key = (klass, defaults_hash, use_passed_as_base)
+
+                if cache_key in _parameters_class_cache:
+                    return cast(
+                        type[CreateParametersType],
+                        _parameters_class_cache[cache_key],
+                    )
+            except (TypeError, ValueError):
+                # If hashing fails, skip cache
+                cache_key = None
+        else:
+            cache_key = None
+
+        # Build the model (original logic)
+        fields = {
+            name: copy(field) for name, field in klass.model_fields.items()
+        }
+        for param_name in fields:
+            field_info = fields[param_name]
+            param_value = getattr(parameters, param_name)
+
+            # Only set default if field doesn't use default_factory
+            # (preserves original behavior for list/dict defaults)
+            if field_info.default_factory is None:
+                field_info.default = param_value
+
         base = (klass,) if use_passed_as_base else klass.__bases__
         model = create_model(  # type: ignore
-            parameters.__class__.__name__,
-            __doc__=parameters.__class__.__doc__,
+            klass.__name__,
+            __doc__=klass.__doc__,
             __base__=base,
             # module parameter is needed only for pickling; so can skip for now
             # pydantic tries to inspect non-exising modules
-            # __module__=parameters.__class__.__module__,
+            # __module__=klass.__module__,
             **{name: (info.annotation, info) for name, info in fields.items()},
         )
         if hasattr(parameters, "targets_name"):
             model.targets_name = parameters.targets_name
+
+        # Store in cache if caching is enabled
+        if cache_key is not None:
+            _parameters_class_cache[cache_key] = model
+
         return cast(type[CreateParametersType], model)
 
     @classmethod

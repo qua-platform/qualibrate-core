@@ -228,6 +228,8 @@ class QualibrationGraph(
             QualibrationGraph: A new QualibrationGraph instance with copied
                 attributes.
         """
+        logger.debug(f"Copying graph {self.name}")
+
         # Create a new instance without calling __init__ directly
         cls = self.__class__
         new_graph = cls.__new__(cls)
@@ -251,7 +253,10 @@ class QualibrationGraph(
         new_graph._elements = {
             name: element.copy(name) for name, element in self._elements.items()
         }
-        new_graph._connectivity = copy.deepcopy(self._connectivity)
+
+        new_graph._connectivity = dict(self._connectivity)
+
+        # Loop conditions need deep copy as they contain mutable objects
         new_graph._loop_conditions = copy.deepcopy(self._loop_conditions)
 
         # Copy graph structure
@@ -271,12 +276,12 @@ class QualibrationGraph(
         # Copy orchestrator if it exists
         new_graph._orchestrator = copy.copy(self._orchestrator)
 
-        # Copy targets
-        new_graph._initial_targets = copy.deepcopy(self._initial_targets)
+        new_graph._initial_targets = list(self._initial_targets)
 
-        # copy runnable items
-        new_graph._state_updates = copy.deepcopy(self._state_updates)
-        new_graph.outcomes = copy.deepcopy(self.outcomes)
+        # Copy runnable items - state_updates and outcomes are dicts with
+        # typically simple values, so shallow copy is usually sufficient
+        new_graph._state_updates = dict(self._state_updates)
+        new_graph.outcomes = dict(self.outcomes)
         new_graph.run_summary = (
             self.run_summary.model_copy(deep=True) if self.run_summary else None
         )
@@ -414,7 +419,7 @@ class QualibrationGraph(
             path (Path): The folder to scan for graph files.
 
         Returns:
-            dict[str, QGraphBaseType]: A dictionary of graph names to their
+            RunnableCollection: A collection of graph names mapped to their
                 corresponding instances.
         """
         graphs: dict[str, QGraphBaseType] = {}
@@ -427,9 +432,14 @@ class QualibrationGraph(
                 )
             run_modes_token = run_modes_ctx.set(RunModes(inspection=True))
 
-            for file in sorted(path.iterdir()):
-                if not file_is_calibration_graph_instance(file, cls.__name__):
-                    continue
+            files_to_scan = [
+                f
+                for f in sorted(path.iterdir())
+                if file_is_calibration_graph_instance(f, cls.__name__)
+            ]
+            logger.debug(f"Found {len(files_to_scan)} graph files to scan")
+
+            for file in files_to_scan:
                 try:
                     cls.scan_graph_file(file, graphs)
                 except Exception as e:
@@ -437,6 +447,8 @@ class QualibrationGraph(
                         f"An error occurred on scanning graph file {file.name}",
                         exc_info=e,
                     )
+
+            logger.debug(f"Successfully scanned {len(graphs)} graphs")
         finally:
             if run_modes_token is not None:
                 run_modes_ctx.reset(run_modes_token)
@@ -469,6 +481,7 @@ class QualibrationGraph(
             graph.filepath = file
             graph.modes.inspection = False
             cls.add_graph(graph, graphs)
+            logger.debug(f"Successfully loaded graph: {graph.name}")
 
     @classmethod
     def add_graph(
@@ -854,7 +867,7 @@ class QualibrationGraph(
                 subgraph_data = {}
                 loop_flag = False
                 loop_data: dict[str, Any] = {}
-                node_conditions = self._loop_conditions.get(node_name)
+                node_conditions = graph_self._loop_conditions.get(node_name)
                 if node_conditions:
                     loop_flag = True
                     loop_data["condition"] = (
