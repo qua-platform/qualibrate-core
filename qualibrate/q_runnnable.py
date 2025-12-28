@@ -197,6 +197,7 @@ class QRunnable(ABC, Generic[CreateParametersType, RunParametersType]):
             name: copy(field) for name, field in klass.model_fields.items()
         }
         for param_name, param_value in parameters.model_dump().items():
+            fields[param_name].default_factory = None
             fields[param_name].default = param_value
 
         base = (klass,) if use_passed_as_base else klass.__bases__

@@ -337,18 +337,15 @@ class QualibrationNode(
         if name is not None:
             instance.name = name
 
-        # During library scanning, most copies don't change parameters
         if node_parameters:
             instance._parameters = instance.parameters_class.model_validate(
                 node_parameters
             )
-            # Only rebuild if we need to embed new defaults
-            instance.parameters_class = (
-                self.build_parameters_class_from_instance(
-                    instance._parameters,
-                    use_cache=True,
-                )
-            )
+
+        instance.parameters_class = self.build_parameters_class_from_instance(
+            instance._parameters,
+            use_cache=False,
+        )
 
         return instance
 
