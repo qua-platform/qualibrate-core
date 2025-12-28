@@ -266,14 +266,43 @@ class QualibrationNode(
         active_node = self.__class__.active_node
         try:
             self.__class__.active_node = None
-            instance = self.__class__(
-                self.name,
-                self.parameters_class(),
-                self.description,
-                modes=modes,
-            )
-            instance.modes.inspection = self.modes.inspection
+
+            # Create instance without full __init__ to avoid
+            # expensive Pydantic model recreation
+            instance = object.__new__(self.__class__)
+
+            # Copy essential attributes directly
+            instance.name = self.name
+            instance.description = self.description
             instance.filepath = self.filepath
+            instance.modes = modes
+
+            # Reuse parameters_class instead of recreating
+            instance.parameters_class = self.parameters_class
+            instance._parameters = self.parameters_class()
+
+            # Initialize other required attributes
+            instance._fraction_complete = 0.0
+            instance.results = {}
+            instance.machine = None
+            instance.storage_manager = None
+            instance._action_manager = ActionManager()
+            instance.namespace = {}
+            instance._state_updates = {}
+            instance.outcomes = {}
+            instance.run_summary = None
+
+            # Only do expensive _post_init() if not in inspection mode
+            # During scanning, we're in inspection mode, so skip this
+            if not modes.inspection:
+                instance._post_init()
+            else:
+                # Minimal initialization for inspection mode
+                instance.run_start = datetime.now().astimezone()
+                instance.last_saved_at = None
+                instance._custom_action_label = None
+
+            instance.modes.inspection = self.modes.inspection
             return instance
         finally:
             self.__class__.active_node = active_node
@@ -307,14 +336,20 @@ class QualibrationNode(
         instance = self.__copy__()
         if name is not None:
             instance.name = name
-        instance._parameters = instance.parameters_class.model_validate(
-            node_parameters
-        )
-        # Base class is inherited from user passed model so don't use passed
-        # class as base for copied parameters class
-        instance.parameters_class = self.build_parameters_class_from_instance(
-            instance._parameters
-        )
+
+        # During library scanning, most copies don't change parameters
+        if node_parameters:
+            instance._parameters = instance.parameters_class.model_validate(
+                node_parameters
+            )
+            # Only rebuild if we need to embed new defaults
+            instance.parameters_class = (
+                self.build_parameters_class_from_instance(
+                    instance._parameters,
+                    use_cache=True,
+                )
+            )
+
         return instance
 
     def set_parameters(self, **parameters: Any) -> None:
