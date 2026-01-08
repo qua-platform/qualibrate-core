@@ -89,6 +89,11 @@ run_modes_ctx: ContextVar[RunModes | None] = ContextVar(
     "run_modes", default=None
 )
 
+# Context variable to pass file path during inspection for optimized name resolution
+inspection_file_ctx: ContextVar[Path | None] = ContextVar(
+    "inspection_file", default=None
+)
+
 
 class QRunnable(ABC, Generic[CreateParametersType, RunParametersType]):
     """

@@ -43,6 +43,7 @@ from qualibrate.q_runnnable import (
     QRunnable,
     file_is_calibration_node_instance,
     run_modes_ctx,
+    inspection_file_ctx,
 )
 from qualibrate.runnables.run_action.action import ActionCallableType
 from qualibrate.runnables.run_action.action_manager import (
@@ -130,8 +131,12 @@ class QualibrationNode(
             return
         name = name or self.__class__._get_name_from_stack_frame()
         logger.info(f"Creating node {name}")
+        
+        # Check if we're in inspection mode
+        is_inspection = run_modes_ctx.get() is not None and run_modes_ctx.get().inspection
+        
         parameters = self.__class__._validate_passed_parameters_options(
-            name, parameters, parameters_class
+            name, parameters, parameters_class, is_inspection=is_inspection
         )
         super().__init__(
             name,
@@ -144,18 +149,27 @@ class QualibrationNode(
         self.results: dict[Any, Any] = {}
         self.machine: NodeMachineType | None = None
         self.storage_manager: StorageManager[Self] | None = None
-
-        # Initialize the ActionManager to handle run_action logic.
-        self._action_manager = ActionManager()
         self.namespace: dict[str, Any] = {}
+
         if self.modes.inspection:
+            # Skip ActionManager creation in inspection mode
+            self._action_manager = None  # type: ignore[assignment]
             raise StopInspection(
                 "Node instantiated in inspection mode", instance=self
             )
+
+        self._action_manager = ActionManager()
         self._post_init()
 
     @staticmethod
     def _get_name_from_stack_frame() -> str:
+        #First try to get name from context variable
+        # This is set during library scanning and avoids expensive inspect.stack()
+        inspection_file = inspection_file_ctx.get()
+        if inspection_file is not None:
+            return inspection_file.stem
+        
+        # Fallback to inspect.stack() for non-scanning use cases
         stack = inspect.stack()
         if not len(stack) or len(stack) < 3:
             raise ValueError("Can't resolve node name from node filename")
@@ -170,12 +184,15 @@ class QualibrationNode(
 
         self._warn_if_external_and_interactive_mpl()
 
+    _cached_default_parameters_model: type[NodeParameters] | None = None
+
     @classmethod
     def _validate_passed_parameters_options(
         cls,
         name: str,
         parameters: ParametersType | None,
         parameters_class: type[ParametersType] | None,
+        is_inspection: bool = False,
     ) -> ParametersType:
         """
         Validates passed parameters and parameters class.
@@ -190,6 +207,8 @@ class QualibrationNode(
             name: The name of the node.
             parameters: Parameters for the node.
             parameters_class: Parameters class.
+            is_inspection: Whether we're in inspection mode. If True, uses
+                cached default model for better performance.
 
         Returns:
             Validated parameters.
@@ -210,23 +229,15 @@ class QualibrationNode(
                 )
             return parameters
         if parameters_class is None:
-            fields = {
-                name: copy.copy(field)
-                for name, field in NodeParameters.model_fields.items()
-            }
-            # Create subclass of NodeParameters. It's needed because otherwise
-            # there will be an issue with type checking of subclasses.
-            # For example: NodeRunSummary.parameters
-            new_model = create_model(  # type: ignore
-                NodeParameters.__name__,
-                __doc__=NodeParameters.__doc__,
-                __base__=NodeParameters,
-                __module__=NodeParameters.__module__,
-                **{
-                    name: (info.annotation, info)
-                    for name, info in fields.items()
-                },
-            )
+            # OPTIMIZATION: In inspection mode, use cached default model
+            # to avoid expensive create_model() calls for each node
+            if is_inspection:
+                if cls._cached_default_parameters_model is None:
+                    cls._cached_default_parameters_model = cls._create_default_parameters_model()
+                return cast(ParametersType, cls._cached_default_parameters_model())
+            
+            # Non-inspection: create full model with proper fields
+            new_model = cls._create_default_parameters_model()
             return cast(ParametersType, new_model())
         logger.warning(
             "parameters_class argument is deprecated. Please use "
@@ -240,6 +251,27 @@ class QualibrationNode(
             raise ValueError(
                 f"Can't instantiate parameters class of node '{name}'"
             ) from e
+
+    @classmethod
+    def _create_default_parameters_model(cls) -> type[NodeParameters]:
+        """Create default parameters model. Extracted for caching."""
+        fields = {
+            name: copy.copy(field)
+            for name, field in NodeParameters.model_fields.items()
+        }
+        # Create subclass of NodeParameters. It's needed because otherwise
+        # there will be an issue with type checking of subclasses.
+        # For example: NodeRunSummary.parameters
+        return create_model(  # type: ignore
+            NodeParameters.__name__,
+            __doc__=NodeParameters.__doc__,
+            __base__=NodeParameters,
+            __module__=NodeParameters.__module__,
+            **{
+                name: (info.annotation, info)
+                for name, info in fields.items()
+            },
+        )
 
     @property
     def action_label(self) -> str | None:
@@ -852,6 +884,7 @@ class QualibrationNode(
             StopInspection: Used to stop execution once inspection completes.
         """
         logger.info(f"Scanning node file {file}")
+        file_token = inspection_file_ctx.set(file)
         try:
             # TODO Think of a safer way to execute the code
             _module = import_from_path(get_module_name(file), file)
@@ -860,6 +893,8 @@ class QualibrationNode(
             node.filepath = file
             node.modes.inspection = False
             cls.add_node(node, nodes)
+        finally:
+            inspection_file_ctx.reset(file_token)
 
     @classmethod
     def add_node(
